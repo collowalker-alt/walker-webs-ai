@@ -1,33 +1,38 @@
+// server.js - GROQ VERSION
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai"; // Groq is OpenAI compatible
+import OpenAI from "openai"; // Groq uses OpenAI SDK
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const groq = new OpenAI({
-  apiKey: process.env.GROQ_API_KEY, // <-- CHANGED
-  baseURL: "https://api.groq.com/openai/v1" // <-- THIS IS THE ONLY DIFFERENCE
+  apiKey: process.env.GROQ_API_KEY, // <-- 1. Changed env name
+  baseURL: "https://api.groq.com/openai/v1" // <-- 2. Added this line
 });
 
-app.get("/", (req, res) => res.send("✅ Walker Webs AI with Groq Running"));
+app.get("/", (req, res) => res.send("✅ Walker Webs AI with GROQ Running"));
 
 app.post("/api/generate", async (req, res) => {
   const { prompt } = req.body;
+  if(!prompt) return res.status(400).json({error: "Prompt is required"});
+
   try {
     const completion = await groq.chat.completions.create({
-      model: "llama-3.1-70b-versatile", // <-- GROQ MODEL. Fastest
+      model: "llama-3.1-70b-versatile", // <-- 3. Changed model to Groq
       messages: [
-        { role: "system", content: "Return ONLY a complete single-file HTML document with inline Tailwind CSS. Dark theme, glassmorphism, modern." },
+        { role: "system", content: "You are an expert web developer. Return ONLY a complete single-file HTML document with inline Tailwind CSS. No explanations, no markdown fences. Dark theme, modern, responsive, glassmorphism." },
         { role: "user", content: `Build me this website: ${prompt}` }
       ],
       temperature: 0.7,
       max_tokens: 3000
     });
+
     let html = completion.choices[0].message.content;
     html = html.replace(/```html/g, "").replace(/```/g, "").trim();
     res.json({ html });
+
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
