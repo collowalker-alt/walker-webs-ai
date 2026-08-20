@@ -44,4 +44,24 @@ Rules:
     console.log("DEBUG GROQ HTTP STATUS:", aiRes.status); // 200 = ok, 401 = bad key
     
     const aiData = await aiRes.json();
-    console.log("DEBUG GROQ ERROR:",
+    console.log("DEBUG GROQ ERROR:", aiData.error?.message);
+
+    if(aiData.error) {
+      return res.status(500).json({error: aiData.error.message})
+    }
+
+    let html = aiData.choices[0].message.content;
+    html = html.replace(/```html/g, '').replace(/```/g, '');
+    res.json({html});
+
+  } catch(e) {
+    console.error(e);
+    res.status(500).json({error: e.message})
+  }
+});
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
