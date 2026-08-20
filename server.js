@@ -8,28 +8,58 @@ app.use(cors());
 app.use(express.json({limit: '10mb'}));
 app.use(express.static('public'));
 
-// AI GENERATE ROUTE
+app.get('/', (req, res) => res.send("Walker Webs AI Backend Running - Groq"));
+
+// PASTE YOUR GROQ KEY HERE
+const GROQ_KEY = "gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
 app.post('/api/generate', async (req, res) => {
   const { prompt } = req.body;
-  // Replace with your real AI
-  const html = `<!DOCTYPE html><html><head><title>${prompt}</title><style>body{margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center}</style></head><body><h1 style="font-size:4rem">${prompt}</h1></body></html>`;
-  res.json({html});
+
+  const fullPrompt = `You are an expert web developer. Generate a complete, beautiful, single-file HTML website based on this request: "${prompt}"
+Rules:
+1. Return ONLY the HTML code. No explanations, no \`\`html
+2. Use TailwindCSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
+3. Make it modern, responsive, with animations, hero, features, and footer
+4. Don't ask questions, just build it`;
+
+  try {
+    const aiRes = await fetch(`https://api.groq.com/openai/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GROQ_KEY}`
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-70b-versatile", // Groq's fastest model
+        messages: [{ role: "user", content: fullPrompt }],
+        temperature: 0.7,
+        max_tokens: 4000
+      })
+    });
+
+    const aiData = await aiRes.json();
+    let html = aiData.choices[0].message.content;
+    html = html.replace(/```html/g, '').replace(/```/g, ''); // remove markdown
+
+    res.json({html});
+
+  } catch(e) {
+    console.error(e);
+    res.status(500).json({error: e.message})
+  }
 });
 
-// PUBLISH ROUTE - DEPLOYS TO walker.web.app
 app.post('/api/publish', async (req, res) => {
   const { projectId, html } = req.body;
-
   try {
     const path = `./public/p/${projectId}`;
     fs.mkdirSync(path, { recursive: true });
     fs.writeFileSync(`${path}/index.html`, html);
-
-    exec(`firebase deploy --only hosting --project walker --force`, (err) => {
-      if(err) return res.status(500).json({error: err.message});
+    exec(`firebase deploy --only hosting --project walker --force`, (err, stdout, stderr) => {
+      if(err) return res.status(500).json({error: stderr});
       res.json({url: `https://walker.web.app/p/${projectId}`});
     });
-
   } catch(e) {
     res.status(500).json({error: e.message})
   }
