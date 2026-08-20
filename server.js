@@ -1,43 +1,39 @@
-// server.js - GROQ VERSION FIXED
-import express from "express";
-import cors from "cors";
-import OpenAI from "openai";
-
+const express = require('express');
+const cors = require('cors');
+const fs = require('fs');
+const { exec } = require('child_process');
 const app = express();
-app.use(cors({ origin: "*" })); // Allow Netlify to call Render
-app.use(express.json());
 
-const groq = new OpenAI({
-  apiKey: process.env.GROQ_API_KEY,
-  baseURL: "https://api.groq.com/openai/v1"
+app.use(cors());
+app.use(express.json({limit: '10mb'}));
+app.use(express.static('public'));
+
+// AI GENERATE ROUTE
+app.post('/api/generate', async (req, res) => {
+  const { prompt } = req.body;
+  // Replace with your real AI
+  const html = `<!DOCTYPE html><html><head><title>${prompt}</title><style>body{margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center}</style></head><body><h1 style="font-size:4rem">${prompt}</h1></body></html>`;
+  res.json({html});
 });
 
-app.get("/", (req, res) => res.send("✅ Walker Webs AI with GROQ Running"));
-
-app.post("/api/generate", async (req, res) => {
-  const { prompt } = req.body;
-  if(!prompt) return res.status(400).json({error: "Prompt is required"});
+// PUBLISH ROUTE - DEPLOYS TO walker.web.app
+app.post('/api/publish', async (req, res) => {
+  const { projectId, html } = req.body;
 
   try {
-    const completion = await groq.chat.completions.create({
-      model: "openai/gpt-oss-120b", // <-- CHANGED THIS. New model
-      messages: [
-        { role: "system", content: "You are an expert web developer. Return ONLY a complete single-file HTML document with inline Tailwind CSS. No explanations, no markdown fences. Dark theme, modern, responsive, glassmorphism." },
-        { role: "user", content: `Build me this website: ${prompt}` }
-      ],
-      temperature: 0.7,
-      max_tokens: 3000
+    const path = `./public/p/${projectId}`;
+    fs.mkdirSync(path, { recursive: true });
+    fs.writeFileSync(`${path}/index.html`, html);
+
+    exec(`firebase deploy --only hosting --project walker --force`, (err) => {
+      if(err) return res.status(500).json({error: err.message});
+      res.json({url: `https://walker.web.app/p/${projectId}`});
     });
 
-    let html = completion.choices[0].message.content;
-    html = html.replace(/```html/g, "").replace(/```/g, "").trim();
-    res.json({ html });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+  } catch(e) {
+    res.status(500).json({error: e.message})
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Groq AI running on ${PORT}`));
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Running on ${port}`));
