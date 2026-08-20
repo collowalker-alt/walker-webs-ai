@@ -20,7 +20,7 @@ app.post("/api/generate", async (req, res) => {
 
   try {
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-instruct", // <-- CHANGED THIS. New model
+      model: "openai/gpt-oss-120b", // <-- CHANGED THIS. New model
       messages: [
         { role: "system", content: "You are an expert web developer. Return ONLY a complete single-file HTML document with inline Tailwind CSS. No explanations, no markdown fences. Dark theme, modern, responsive, glassmorphism." },
         { role: "user", content: `Build me this website: ${prompt}` }
