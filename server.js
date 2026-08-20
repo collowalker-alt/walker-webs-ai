@@ -11,7 +11,7 @@ app.use(express.static('public'));
 app.get('/', (req, res) => res.send("Walker Webs AI Backend Running - Groq"));
 
 // PASTE YOUR GROQ KEY HERE
-const GROQ_KEY = "gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+const GROQ_KEY = process.env.GROQ_KEY;
 
 app.post('/api/generate', async (req, res) => {
   const { prompt } = req.body;
