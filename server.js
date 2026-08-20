@@ -20,8 +20,7 @@ app.post('/api/generate', async (req, res) => {
 Rules:
 1. Return ONLY the HTML code. No explanations, no \`\`html
 2. Use TailwindCSS via CDN: <script src="https://cdn.tailwindcss.com"></script>
-3. Make it modern, responsive, with animations, hero, features, and footer
-4. Don't ask questions, just build it`;
+3. Make it modern, responsive, with animations, hero, features, and footer`;
 
   try {
     const aiRes = await fetch(`https://api.groq.com/openai/v1/chat/completions`, {
@@ -31,7 +30,7 @@ Rules:
         "Authorization": `Bearer ${GROQ_KEY}`
       },
       body: JSON.stringify({
-        model: "llama-3.1-70b-versatile", // Groq's fastest model
+        model: "llama-3.1-70b-versatile",
         messages: [{ role: "user", content: fullPrompt }],
         temperature: 0.7,
         max_tokens: 4000
@@ -39,6 +38,18 @@ Rules:
     });
 
     const aiData = await aiRes.json();
+
+    console.log("Groq Response:", aiData); // DEBUG: check Render Logs
+
+    // CHECK IF GROQ RETURNED AN ERROR
+    if(aiData.error) {
+      return res.status(500).json({error: aiData.error.message})
+    }
+
+    if(!aiData.choices ||!aiData.choices[0]) {
+      return res.status(500).json({error: "Groq returned empty. Full response: " + JSON.stringify(aiData)})
+    }
+
     let html = aiData.choices[0].message.content;
     html = html.replace(/```html/g, '').replace(/```/g, ''); // remove markdown
 
