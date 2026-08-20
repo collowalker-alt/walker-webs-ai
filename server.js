@@ -1,15 +1,15 @@
-// server.js - GROQ VERSION
+// server.js - GROQ VERSION FIXED
 import express from "express";
 import cors from "cors";
-import OpenAI from "openai"; // Groq uses OpenAI SDK
+import OpenAI from "openai";
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const groq = new OpenAI({
-  apiKey: process.env.GROQ_API_KEY, // <-- 1. Changed env name
-  baseURL: "https://api.groq.com/openai/v1" // <-- 2. Added this line
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1"
 });
 
 app.get("/", (req, res) => res.send("✅ Walker Webs AI with GROQ Running"));
@@ -20,7 +20,7 @@ app.post("/api/generate", async (req, res) => {
 
   try {
     const completion = await groq.chat.completions.create({
-      model: "llama-3.1-70b-versatile", // <-- 3. Changed model to Groq
+      model: "llama-3.3-70b-versatile", // <-- CHANGED THIS. New model
       messages: [
         { role: "system", content: "You are an expert web developer. Return ONLY a complete single-file HTML document with inline Tailwind CSS. No explanations, no markdown fences. Dark theme, modern, responsive, glassmorphism." },
         { role: "user", content: `Build me this website: ${prompt}` }
