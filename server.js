@@ -4,7 +4,7 @@ import cors from "cors";
 import OpenAI from "openai";
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: "*" })); // Allow Netlify to call Render
 app.use(express.json());
 
 const groq = new OpenAI({
