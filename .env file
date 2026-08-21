@@ -1,0 +1,21 @@
+PORT=3000
+
+GROQ_KEY=YOUR_GROQ_API_KEY
+
+FIREBASE_PROJECT_ID=walker-webs
+
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@walker-webs.iam.gserviceaccount.com
+
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_FIREBASE_PRIVATE_KEY\n-----END PRIVATE KEY-----\n"
+
+PUBLIC_URL=https://walker-webs.web.app
+
+ALLOWED_ORIGINS=https://walker-webs.web.app,https://walker-webs.firebaseapp.com
+
+TRC20_WALLET=TQn9Y2khEsLJW1ChVWFGP2XNn9wSy8r1Hk
+
+TRONGRID_API_KEY=YOUR_TRONGRID_API_KEY
+
+TRONGRID_URL=https://api.trongrid.io
+
+USDT_TRC20_CONTRACT=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
