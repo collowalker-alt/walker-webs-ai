@@ -4,12 +4,28 @@
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "server.js",
+      "package.json",
+      "package-lock.json",
+      ".env",
+      ".env.*"
     ],
     "rewrites": [
       {
-        "source": "/p/**",
+        "source": "/**",
         "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "**/*.@(js|css|html)",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
       }
     ]
   }
