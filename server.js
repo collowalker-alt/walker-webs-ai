@@ -3,31 +3,57 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
 const admin = require("firebase-admin");
 
-// Node 18+ has global fetch.
-// If you're using Node 16 or older, upgrade Node.
-if (typeof fetch !== "function") {
-  console.error(
-    "This server requires Node.js 18 or newer because it uses fetch()."
-  );
-  process.exit(1);
-}
-
 const app = express();
+
+/*
+============================================================
+WALKER WEBS SERVER
+============================================================
+
+Recommended Node version:
+Node 20+
+
+This server provides:
+
+- /api/health
+- /api/generate
+- /api/edit
+- /api/usage
+- /api/publish
+- /api/payments/submit
+- /api/payments/:paymentId
+- /p/:publishId
+- frontend serving
+============================================================
+*/
+
+// ============================================================
+// SERVER CONFIG
+// ============================================================
 
 const PORT = Number(process.env.PORT) || 3000;
 
-const PUBLIC_DIR = path.join(__dirname, "public");
-const INDEX_FILE = path.join(PUBLIC_DIR, "index.html");
+const PUBLIC_DIR = path.join(
+  __dirname,
+  "public"
+);
+
+const INDEX_FILE = path.join(
+  PUBLIC_DIR,
+  "index.html"
+);
 
 // ============================================================
 // ENVIRONMENT
 // ============================================================
 
-const GROQ_KEY = process.env.GROQ_KEY || "";
+const GROQ_KEY =
+  process.env.GROQ_KEY || "";
 
 const PUBLIC_URL = (
   process.env.PUBLIC_URL ||
@@ -36,7 +62,7 @@ const PUBLIC_URL = (
 
 const TRC20_WALLET =
   process.env.TRC20_WALLET ||
-  "TQn9Y2khEsLJW1ChVWFGP2XNn9wSy8r1Hk";
+  "TKRAT57UckeS15pxfkGyaxvyHmdKuupZgD";
 
 const TRONGRID_API_KEY =
   process.env.TRONGRID_API_KEY || "";
@@ -46,7 +72,6 @@ const TRONGRID_URL = (
   "https://api.trongrid.io"
 ).replace(/\/$/, "");
 
-// Official USDT TRC20 contract
 const USDT_TRC20_CONTRACT =
   process.env.USDT_TRC20_CONTRACT ||
   "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
@@ -54,7 +79,14 @@ const USDT_TRC20_CONTRACT =
 const USDT_DECIMALS = 6;
 
 // ============================================================
-// PLANS
+// FREE LIMITS
+// ============================================================
+
+const FREE_WEBSITES = 3;
+const FREE_EDITS = 3;
+
+// ============================================================
+// PAID PLANS
 // ============================================================
 
 const PLANS = Object.freeze({
@@ -75,78 +107,93 @@ const PLANS = Object.freeze({
 });
 
 // ============================================================
-// BASIC CONFIGURATION CHECK
+// STARTUP LOG
 // ============================================================
 
-console.log("==============================================");
-console.log("WALKER WEBS SERVER");
-console.log("==============================================");
-
-console.log("PORT:", PORT);
-console.log("PUBLIC_URL:", PUBLIC_URL);
-console.log("PUBLIC_DIR:", PUBLIC_DIR);
-console.log("Frontend index:", INDEX_FILE);
+console.log("");
+console.log("==========================================");
+console.log("WALKER WEBS SERVER STARTING");
+console.log("==========================================");
+console.log("Node:", process.version);
+console.log("Port:", PORT);
+console.log("Public URL:", PUBLIC_URL);
+console.log("Frontend directory:", PUBLIC_DIR);
+console.log("Frontend exists:", fs.existsSync(INDEX_FILE));
 console.log("GROQ configured:", Boolean(GROQ_KEY));
-console.log("Firebase credentials:", Boolean(
-  process.env.FIREBASE_PROJECT_ID &&
-  process.env.FIREBASE_CLIENT_EMAIL &&
-  process.env.FIREBASE_PRIVATE_KEY
-));
-console.log("TRON API configured:", Boolean(TRONGRID_API_KEY));
-console.log("Payment wallet:", TRC20_WALLET);
+console.log("TRON configured:", Boolean(TRONGRID_API_KEY));
+console.log("Firebase environment configured:",
+  Boolean(
+    process.env.FIREBASE_PROJECT_ID &&
+    process.env.FIREBASE_CLIENT_EMAIL &&
+    process.env.FIREBASE_PRIVATE_KEY
+  )
+);
+console.log("==========================================");
+console.log("");
 
-if (!GROQ_KEY) {
-  console.warn("WARNING: GROQ_KEY is not configured.");
-}
+// ============================================================
+// NODE FETCH CHECK
+// ============================================================
 
-if (!TRONGRID_API_KEY) {
-  console.warn("WARNING: TRONGRID_API_KEY is not configured.");
+if (typeof fetch !== "function") {
+  console.error("");
+  console.error(
+    "ERROR: fetch() is unavailable."
+  );
+  console.error(
+    "Use Node.js 18 or newer. Node 20/22 is recommended."
+  );
+  console.error("");
+  process.exit(1);
 }
 
 // ============================================================
-// FIREBASE ADMIN
+// FIREBASE
 // ============================================================
 
 function initFirebase() {
-  if (admin.apps.length > 0) {
-    return admin.app();
-  }
-
-  const projectId =
-    process.env.FIREBASE_PROJECT_ID;
-
-  const clientEmail =
-    process.env.FIREBASE_CLIENT_EMAIL;
-
-  const privateKey =
-    process.env.FIREBASE_PRIVATE_KEY;
-
-  if (
-    !projectId ||
-    !clientEmail ||
-    !privateKey
-  ) {
-    console.warn(
-      "Firebase Admin credentials are incomplete."
-    );
-
-    return null;
-  }
-
   try {
+    if (admin.apps.length > 0) {
+      return admin.app();
+    }
+
+    const projectId =
+      process.env.FIREBASE_PROJECT_ID;
+
+    const clientEmail =
+      process.env.FIREBASE_CLIENT_EMAIL;
+
+    const privateKey =
+      process.env.FIREBASE_PRIVATE_KEY;
+
+    if (
+      !projectId ||
+      !clientEmail ||
+      !privateKey
+    ) {
+      console.warn(
+        "Firebase Admin credentials are not configured."
+      );
+
+      return null;
+    }
+
     return admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId,
-        clientEmail,
-        privateKey: privateKey.replace(
-          /\\n/g,
-          "\n"
-        )
-      })
+      credential:
+        admin.credential.cert({
+          projectId,
+          clientEmail,
+          privateKey:
+            privateKey.replace(
+              /\\n/g,
+              "\n"
+            )
+        })
     });
+
   } catch (error) {
     console.error(
-      "Firebase initialization failed:",
+      "Firebase initialization error:",
       error.message
     );
 
@@ -154,35 +201,44 @@ function initFirebase() {
   }
 }
 
-const firebaseApp = initFirebase();
+const firebaseApp =
+  initFirebase();
 
-const db = firebaseApp
-  ? admin.firestore()
-  : null;
+const db =
+  firebaseApp
+    ? admin.firestore()
+    : null;
 
 const FieldValue =
   admin.firestore.FieldValue;
 
 // ============================================================
-// EXPRESS CONFIGURATION
+// EXPRESS
 // ============================================================
 
-app.disable("x-powered-by");
+app.disable(
+  "x-powered-by"
+);
 
-app.set("trust proxy", 1);
+app.set(
+  "trust proxy",
+  1
+);
 
-// JSON body parser
+// ============================================================
+// BODY PARSING
+// ============================================================
+
 app.use(
   express.json({
-    limit: "10mb"
+    limit: "12mb"
   })
 );
 
-// URL encoded body parser
 app.use(
   express.urlencoded({
     extended: true,
-    limit: "10mb"
+    limit: "12mb"
   })
 );
 
@@ -191,123 +247,152 @@ app.use(
 // ============================================================
 
 const allowedOrigins = (
-  process.env.ALLOWED_ORIGINS || ""
+  process.env.ALLOWED_ORIGINS ||
+  ""
 )
   .split(",")
-  .map((item) => item.trim())
+  .map(
+    x => x.trim()
+  )
   .filter(Boolean);
 
 app.use(
   cors({
     origin(origin, callback) {
-      // Requests without Origin are allowed.
-      // This includes same-origin/server-side requests.
+
+      // Non-browser/server request
       if (!origin) {
-        return callback(null, true);
+        return callback(
+          null,
+          true
+        );
       }
 
       const allowed =
         allowedOrigins.length === 0 ||
-        allowedOrigins.includes(origin) ||
-        /^https:\/\/([a-z0-9-]+\.)?web\.app$/i.test(origin) ||
-        /^https:\/\/([a-z0-9-]+\.)?firebaseapp\.com$/i.test(origin) ||
-        /^http:\/\/localhost(:\d+)?$/i.test(origin) ||
-        /^http:\/\/127\.0\.0\.1(:\d+)?$/i.test(origin);
+        allowedOrigins.includes(
+          origin
+        ) ||
+
+        /^https:\/\/([a-z0-9-]+\.)?web\.app$/i
+          .test(origin) ||
+
+        /^https:\/\/([a-z0-9-]+\.)?firebaseapp\.com$/i
+          .test(origin) ||
+
+        /^https:\/\/([a-z0-9-]+\.)?onrender\.com$/i
+          .test(origin) ||
+
+        /^https?:\/\/localhost(:\d+)?$/i
+          .test(origin) ||
+
+        /^https?:\/\/127\.0\.0\.1(:\d+)?$/i
+          .test(origin);
 
       if (allowed) {
-        return callback(null, true);
+        return callback(
+          null,
+          true
+        );
       }
 
       console.warn(
-        "Blocked CORS origin:",
+        "CORS blocked:",
         origin
       );
 
       return callback(
-        new Error("CORS not allowed")
+        new Error(
+          "CORS not allowed"
+        )
       );
     },
 
     methods: [
       "GET",
       "POST",
-      "DELETE",
       "OPTIONS"
     ],
 
     allowedHeaders: [
       "Content-Type",
       "Authorization"
-    ]
+    ],
+
+    credentials: true
   })
+);
+
+// Explicit OPTIONS handling
+app.options(
+  "*",
+  cors()
 );
 
 // ============================================================
 // RATE LIMITERS
 // ============================================================
 
-const generateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+const generateLimiter =
+  rateLimit({
+    windowMs:
+      15 * 60 * 1000,
 
-  standardHeaders: true,
-  legacyHeaders: false,
+    max: 100,
 
-  message: {
-    error:
-      "Rate limit reached. Please wait 15 minutes."
-  }
-});
+    standardHeaders:
+      true,
 
-const paymentLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
+    legacyHeaders:
+      false,
 
-  standardHeaders: true,
-  legacyHeaders: false,
+    message: {
+      error:
+        "Rate limit reached. Please wait 15 minutes."
+    }
+  });
 
-  message: {
-    error:
-      "Too many payment requests. Please wait."
-  }
-});
+const paymentLimiter =
+  rateLimit({
+    windowMs:
+      15 * 60 * 1000,
 
-// ============================================================
-// STATIC FRONTEND FILES
-// ============================================================
+    max: 30,
 
-// IMPORTANT:
-// Static files are registered before the SPA fallback.
+    standardHeaders:
+      true,
 
-app.use(
-  express.static(PUBLIC_DIR, {
-    index: false,
+    legacyHeaders:
+      false,
 
-    maxAge:
-      process.env.NODE_ENV === "production"
-        ? "1h"
-        : 0
-  })
-);
+    message: {
+      error:
+        "Too many payment requests. Please wait."
+    }
+  });
 
 // ============================================================
-// FIREBASE HELPERS
+// FIREBASE REQUIREMENT
 // ============================================================
 
 function requireFirebase() {
-  if (!db) {
-    const error = new Error(
-      "Firebase Admin is not configured on the server."
-    );
 
-    error.status = 503;
+  if (!db) {
+
+    const error =
+      new Error(
+        "Firebase Admin is not configured on the server."
+      );
+
+    error.status =
+      503;
 
     throw error;
   }
 }
 
 // ============================================================
-// AUTH MIDDLEWARE
+// AUTHENTICATION
 // ============================================================
 
 async function requireUser(
@@ -315,18 +400,24 @@ async function requireUser(
   res,
   next
 ) {
+
   try {
+
     requireFirebase();
 
     const authorization =
-      req.headers.authorization || "";
+      req.headers.authorization ||
+      "";
 
     if (
       !authorization.startsWith(
         "Bearer "
       )
     ) {
-      return res.status(401).json({
+
+      return res.status(
+        401
+      ).json({
         error:
           "Authentication required."
       });
@@ -338,27 +429,37 @@ async function requireUser(
         .trim();
 
     if (!token) {
-      return res.status(401).json({
+
+      return res.status(
+        401
+      ).json({
         error:
           "Authentication token is missing."
       });
     }
 
     const decoded =
-      await admin.auth()
-        .verifyIdToken(token);
+      await admin
+        .auth()
+        .verifyIdToken(
+          token
+        );
 
-    req.user = decoded;
+    req.user =
+      decoded;
 
-    next();
+    return next();
+
   } catch (error) {
+
     console.error(
       "AUTH ERROR:",
       error.message
     );
 
     return res.status(
-      error.status || 401
+      error.status ||
+      401
     ).json({
       error:
         error.status === 503
@@ -371,15 +472,31 @@ async function requireUser(
 // ============================================================
 // HEALTH CHECK
 // ============================================================
+//
+// IMPORTANT:
+// This endpoint does NOT require Firebase.
+// This endpoint does NOT require GROQ.
+// This endpoint does NOT require TRON.
+//
+// Therefore the frontend can always determine whether
+// the Node server itself is alive.
+//
 
 app.get(
   "/api/health",
   (req, res) => {
-    res.json({
+
+    return res.status(
+      200
+    ).json({
+
       ok: true,
 
       service:
         "walker-webs-backend",
+
+      status:
+        "online",
 
       firebase:
         Boolean(db),
@@ -388,10 +505,20 @@ app.get(
         Boolean(GROQ_KEY),
 
       tronVerification:
-        Boolean(TRONGRID_API_KEY),
+        Boolean(
+          TRONGRID_API_KEY
+        ),
 
       walletConfigured:
-        Boolean(TRC20_WALLET),
+        Boolean(
+          TRC20_WALLET
+        ),
+
+      freeWebsites:
+        FREE_WEBSITES,
+
+      freeEdits:
+        FREE_EDITS,
 
       timestamp:
         Date.now()
@@ -400,187 +527,277 @@ app.get(
 );
 
 // ============================================================
-// AI WEBSITE GENERATION
+// FRONTEND STATIC FILES
+// ============================================================
+
+if (
+  fs.existsSync(
+    PUBLIC_DIR
+  )
+) {
+
+  app.use(
+    express.static(
+      PUBLIC_DIR,
+      {
+        index: false,
+        maxAge:
+          process.env.NODE_ENV ===
+          "production"
+            ? "1h"
+            : 0
+      }
+    )
+  );
+
+} else {
+
+  console.warn(
+    "WARNING: public directory does not exist:",
+    PUBLIC_DIR
+  );
+}
+
+// ============================================================
+// HTML HELPERS
+// ============================================================
+
+function cleanHTML(
+  html
+) {
+
+  return String(
+    html || ""
+  )
+    .replace(
+      /^```html\s*/i,
+      ""
+    )
+    .replace(
+      /^```\s*/i,
+      ""
+    )
+    .replace(
+      /\s*```$/i,
+      ""
+    )
+    .trim();
+}
+
+function isHTML(
+  html
+) {
+
+  const value =
+    String(
+      html || ""
+    ).toLowerCase();
+
+  return (
+    value.includes(
+      "<!doctype html"
+    ) ||
+    value.includes(
+      "<html"
+    )
+  );
+}
+
+// ============================================================
+// GROQ AI
+// ============================================================
+
+async function groqHTML(
+  instruction
+) {
+
+  if (!GROQ_KEY) {
+
+    const error =
+      new Error(
+        "AI service is not configured. GROQ_KEY is missing."
+      );
+
+    error.status =
+      503;
+
+    throw error;
+  }
+
+  const prompt = `
+You are the expert web developer for WALKER WEBS.
+
+Create or modify a complete production-quality
+single-file HTML website.
+
+USER INSTRUCTION:
+
+${instruction}
+
+RULES:
+
+1. Return ONLY complete HTML.
+2. No markdown code fences.
+3. The document must start with <!DOCTYPE html>.
+4. Use Tailwind CSS CDN when useful.
+5. Mobile-first.
+6. Responsive on phones, tablets and desktop.
+7. Semantic accessible HTML.
+8. Modern typography.
+9. Polished spacing.
+10. Modern cards and sections.
+11. Subtle animations.
+12. Strong CTA.
+13. Responsive navigation.
+14. Footer.
+15. Never expose API keys.
+16. Never expose secrets.
+17. Keep everything inside one HTML file.
+18. Preserve existing functionality unless requested otherwise.
+19. Make sure JavaScript works.
+20. Return the COMPLETE final HTML document.
+`;
+
+  const response =
+    await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method:
+          "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          Authorization:
+            `Bearer ${GROQ_KEY}`
+        },
+
+        body:
+          JSON.stringify({
+            model:
+              "openai/gpt-oss-120b",
+
+            messages: [
+              {
+                role:
+                  "user",
+
+                content:
+                  prompt
+              }
+            ],
+
+            temperature:
+              0.7,
+
+            max_tokens:
+              10000
+          })
+      }
+    );
+
+  const data =
+    await response
+      .json()
+      .catch(
+        () => ({})
+      );
+
+  if (
+    !response.ok ||
+    data.error
+  ) {
+
+    console.error(
+      "GROQ ERROR:",
+      data.error ||
+        response.statusText
+    );
+
+    const error =
+      new Error(
+        data?.error?.message ||
+        "AI generation failed."
+      );
+
+    error.status =
+      response.status ===
+      429
+        ? 429
+        : 502;
+
+    throw error;
+  }
+
+  const html =
+    cleanHTML(
+      data
+        ?.choices?.[0]
+        ?.message
+        ?.content ||
+        ""
+    );
+
+  if (
+    !isHTML(html)
+  ) {
+
+    throw new Error(
+      "AI returned invalid HTML."
+    );
+  }
+
+  return html;
+}
+
+// ============================================================
+// GENERATE WEBSITE
 // ============================================================
 
 app.post(
   "/api/generate",
   generateLimiter,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
+
     try {
+
       const prompt =
-        typeof req.body?.prompt === "string"
+        typeof req.body?.prompt ===
+        "string"
           ? req.body.prompt.trim()
           : "";
 
       if (!prompt) {
-        return res.status(400).json({
+
+        return res.status(
+          400
+        ).json({
           error:
             "Prompt is required."
         });
       }
 
-      if (prompt.length > 6000) {
-        return res.status(400).json({
+      if (
+        prompt.length >
+        6000
+      ) {
+
+        return res.status(
+          400
+        ).json({
           error:
             "Prompt is too long."
         });
       }
 
-      if (!GROQ_KEY) {
-        return res.status(503).json({
-          error:
-            "AI service is not configured. Add GROQ_KEY to your server environment."
-        });
-      }
-
-      const fullPrompt = `
-You are an expert web developer for WALKER WEBS.
-
-Generate a complete production-quality
-single-file HTML website based on this request:
-
-"${prompt}"
-
-IMPORTANT RULES:
-
-1. Return ONLY complete HTML.
-2. Do NOT use markdown code fences.
-3. The document must start with <!DOCTYPE html>.
-4. Use Tailwind CSS CDN.
-5. Make the website mobile-first.
-6. Make it responsive on phones, tablets and desktop.
-7. Use semantic accessible HTML.
-8. Use modern typography.
-9. Use polished spacing.
-10. Use modern cards and sections.
-11. Add subtle animations.
-12. Include a strong CTA.
-13. Include responsive navigation.
-14. Include a footer.
-15. Do not expose API keys.
-16. Do not invent secrets.
-17. Keep everything inside one HTML file.
-18. Make sure all JavaScript works.
-19. Make sure the final HTML is complete.
-20. Do not explain the code.
-21. Do not wrap the result in markdown.
-`;
-
-      const response =
-        await fetch(
-          "https://api.groq.com/openai/v1/chat/completions",
-          {
-            method: "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json",
-
-              Authorization:
-                `Bearer ${GROQ_KEY}`
-            },
-
-            body: JSON.stringify({
-              model:
-                "openai/gpt-oss-120b",
-
-              messages: [
-                {
-                  role: "user",
-                  content: fullPrompt
-                }
-              ],
-
-              temperature: 0.7,
-
-              max_tokens: 6000
-            })
-          }
+      const html =
+        await groqHTML(
+          prompt
         );
-
-      const data =
-        await response.json()
-          .catch(() => ({}));
-
-      if (!response.ok) {
-        console.error(
-          "GROQ HTTP ERROR:",
-          response.status,
-          data
-        );
-
-        return res.status(
-          response.status === 429
-            ? 429
-            : 502
-        ).json({
-          error:
-            data?.error?.message ||
-            "AI generation failed."
-        });
-      }
-
-      if (data?.error) {
-        console.error(
-          "GROQ API ERROR:",
-          data.error
-        );
-
-        return res.status(502).json({
-          error:
-            data.error.message ||
-            "AI generation failed."
-        });
-      }
-
-      let html =
-        data?.choices?.[0]
-          ?.message?.content || "";
-
-      html = html
-        .replace(
-          /^```html\s*/i,
-          ""
-        )
-        .replace(
-          /^```\s*/i,
-          ""
-        )
-        .replace(
-          /\s*```$/i,
-          ""
-        )
-        .trim();
-
-      if (!html) {
-        return res.status(502).json({
-          error:
-            "AI returned an empty response."
-        });
-      }
-
-      const lower =
-        html.toLowerCase();
-
-      if (
-        !lower.includes(
-          "<!doctype html"
-        ) &&
-        !lower.includes(
-          "<html"
-        )
-      ) {
-        console.error(
-          "Invalid AI HTML:",
-          html.substring(0, 500)
-        );
-
-        return res.status(502).json({
-          error:
-            "AI returned invalid HTML."
-        });
-      }
 
       return res.json({
         ok: true,
@@ -588,13 +805,18 @@ IMPORTANT RULES:
       });
 
     } catch (error) {
+
       console.error(
         "GENERATE ERROR:",
         error
       );
 
-      return res.status(500).json({
+      return res.status(
+        error.status ||
+        500
+      ).json({
         error:
+          error.message ||
           "Website generation failed."
       });
     }
@@ -602,13 +824,434 @@ IMPORTANT RULES:
 );
 
 // ============================================================
-// PLAN HELPERS
+// USAGE
+// ============================================================
+
+async function getUserUsage(
+  uid
+) {
+
+  requireFirebase();
+
+  const ref =
+    db
+      .collection(
+        "usage"
+      )
+      .doc(uid);
+
+  const snap =
+    await ref.get();
+
+  if (
+    !snap.exists
+  ) {
+
+    return {
+      websitesPublished:
+        0,
+
+      websitesCreated:
+        0,
+
+      edits:
+        0,
+
+      freeDownloads:
+        0,
+
+      updatedAt:
+        Date.now()
+    };
+  }
+
+  return {
+    websitesPublished:
+      0,
+
+    websitesCreated:
+      0,
+
+    edits:
+      0,
+
+    freeDownloads:
+      0,
+
+    ...snap.data()
+  };
+}
+
+// ============================================================
+// INCREMENT USAGE
+// ============================================================
+
+async function incrementUsage(
+  uid,
+  fields
+) {
+
+  requireFirebase();
+
+  const ref =
+    db
+      .collection(
+        "usage"
+      )
+      .doc(uid);
+
+  const update = {
+    updatedAt:
+      FieldValue.serverTimestamp()
+  };
+
+  for (
+    const [
+      key,
+      value
+    ] of Object.entries(
+      fields
+    )
+  ) {
+
+    update[key] =
+      FieldValue.increment(
+        Number(value)
+      );
+  }
+
+  await ref.set(
+    update,
+    {
+      merge: true
+    }
+  );
+}
+
+// ============================================================
+// ACTIVE PAID PLAN
+// ============================================================
+
+async function hasActivePaidPlan(
+  uid
+) {
+
+  requireFirebase();
+
+  const snap =
+    await db
+      .collection(
+        "subscriptions"
+      )
+      .doc(uid)
+      .get();
+
+  if (
+    !snap.exists
+  ) {
+    return false;
+  }
+
+  const subscription =
+    snap.data();
+
+  if (
+    subscription.type ===
+    "lifetime"
+  ) {
+    return true;
+  }
+
+  if (
+    subscription.type ===
+    "monthly"
+  ) {
+
+    return (
+      Number(
+        subscription.expiresAt ||
+        0
+      ) >
+      Date.now()
+    );
+  }
+
+  if (
+    subscription.type ===
+    "single"
+  ) {
+
+    return (
+      Number(
+        subscription.credits ||
+        0
+      ) > 0
+    );
+  }
+
+  return false;
+}
+
+// ============================================================
+// SINGLE CREDIT
+// ============================================================
+
+async function consumeSingleCredit(
+  uid
+) {
+
+  requireFirebase();
+
+  const ref =
+    db
+      .collection(
+        "subscriptions"
+      )
+      .doc(uid);
+
+  return db.runTransaction(
+    async transaction => {
+
+      const snap =
+        await transaction.get(
+          ref
+        );
+
+      if (
+        !snap.exists
+      ) {
+        return false;
+      }
+
+      const subscription =
+        snap.data();
+
+      if (
+        subscription.type !==
+        "single"
+      ) {
+        return false;
+      }
+
+      if (
+        Number(
+          subscription.credits ||
+          0
+        ) <= 0
+      ) {
+        return false;
+      }
+
+      transaction.update(
+        ref,
+        {
+          credits:
+            FieldValue.increment(
+              -1
+            ),
+
+          updatedAt:
+            Date.now()
+        }
+      );
+
+      return true;
+    }
+  );
+}
+
+// ============================================================
+// EDIT WEBSITE
+// ============================================================
+
+app.post(
+  "/api/edit",
+  requireUser,
+  async (
+    req,
+    res
+  ) => {
+
+    try {
+
+      const html =
+        typeof req.body?.html ===
+        "string"
+          ? req.body.html
+          : "";
+
+      const instruction =
+        typeof req.body?.instruction ===
+        "string"
+          ? req.body.instruction.trim()
+          : "";
+
+      if (
+        !html ||
+        !isHTML(html)
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Valid website HTML is required."
+        });
+      }
+
+      if (
+        !instruction
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Edit instruction is required."
+        });
+      }
+
+      if (
+        instruction.length >
+        4000
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Edit instruction is too long."
+        });
+      }
+
+      if (
+        html.length >
+        9000000
+      ) {
+
+        return res.status(
+          413
+        ).json({
+          error:
+            "Website HTML is too large."
+        });
+      }
+
+      const uid =
+        req.user.uid;
+
+      const usage =
+        await getUserUsage(
+          uid
+        );
+
+      const paid =
+        await hasActivePaidPlan(
+          uid
+        );
+
+      const editsUsed =
+        Number(
+          usage.edits || 0
+        );
+
+      if (
+        editsUsed >=
+        FREE_EDITS &&
+        !paid
+      ) {
+
+        return res.status(
+          402
+        ).json({
+
+          error:
+            "Your 3 free edits are finished. Purchase a plan to continue editing.",
+
+          code:
+            "EDIT_PAYMENT_REQUIRED"
+        });
+      }
+
+      const instructionWithHTML = `
+Modify this EXISTING website.
+
+REQUESTED CHANGE:
+${instruction}
+
+EXISTING WEBSITE:
+${html}
+`;
+
+      const updatedHTML =
+        await groqHTML(
+          instructionWithHTML
+        );
+
+      /*
+       * Free edits are counted only
+       * after successful AI generation.
+       */
+      if (!paid) {
+
+        await incrementUsage(
+          uid,
+          {
+            edits:
+              1
+          }
+        );
+      }
+
+      return res.json({
+
+        ok:
+          true,
+
+        html:
+          updatedHTML,
+
+        paid,
+
+        freeEditsRemaining:
+          paid
+            ? 0
+            : Math.max(
+                0,
+                FREE_EDITS -
+                editsUsed -
+                1
+              )
+      });
+
+    } catch (error) {
+
+      console.error(
+        "EDIT ERROR:",
+        error
+      );
+
+      return res.status(
+        error.status ||
+        500
+      ).json({
+        error:
+          error.message ||
+          "Website edit failed."
+      });
+    }
+  }
+);
+
+// ============================================================
+// USDT HELPERS
 // ============================================================
 
 function getPlan(
   type,
   amount
 ) {
+
   const plan =
     PLANS[type];
 
@@ -618,7 +1261,9 @@ function getPlan(
 
   if (
     Number(amount) !==
-    Number(plan.amount)
+    Number(
+      plan.amount
+    )
   ) {
     return null;
   }
@@ -629,10 +1274,12 @@ function getPlan(
 function toTokenUnits(
   usdt
 ) {
+
   return BigInt(
     Math.round(
       Number(usdt) *
-        10 ** USDT_DECIMALS
+      10 **
+      USDT_DECIMALS
     )
   );
 }
@@ -641,6 +1288,7 @@ function sameAddress(
   a,
   b
 ) {
+
   return (
     String(a || "")
       .trim()
@@ -654,8 +1302,12 @@ function sameAddress(
 function transactionIsRecent(
   timestamp,
   maxAgeMs =
-    24 * 60 * 60 * 1000
+    24 *
+    60 *
+    60 *
+    1000
 ) {
+
   if (!timestamp) {
     return false;
   }
@@ -666,33 +1318,41 @@ function transactionIsRecent(
 
   return (
     age >= 0 &&
-    age <= maxAgeMs
+    age <=
+    maxAgeMs
   );
 }
 
 // ============================================================
-// TRON API
+// TRONGRID
 // ============================================================
 
 async function tronRequest(
   url
 ) {
+
   const headers = {
     Accept:
       "application/json"
   };
 
-  if (TRONGRID_API_KEY) {
+  if (
+    TRONGRID_API_KEY
+  ) {
+
     headers[
       "TRON-PRO-API-KEY"
-    ] = TRONGRID_API_KEY;
+    ] =
+      TRONGRID_API_KEY;
   }
 
   const response =
     await fetch(
       url,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers
       }
     );
@@ -700,9 +1360,14 @@ async function tronRequest(
   const data =
     await response
       .json()
-      .catch(() => ({}));
+      .catch(
+        () => ({})
+      );
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
+
     throw new Error(
       `TronGrid ${response.status}: ${
         data?.error ||
@@ -716,26 +1381,34 @@ async function tronRequest(
 }
 
 // ============================================================
-// USDT TRC20 PAYMENT VERIFICATION
+// VERIFY USDT
 // ============================================================
 
 async function verifyUsdtPayment(
   txHash,
   expectedAmount
 ) {
-  if (!TRONGRID_API_KEY) {
+
+  if (
+    !TRONGRID_API_KEY
+  ) {
+
     throw new Error(
       "TRONGRID_API_KEY is not configured."
     );
   }
 
   const hash =
-    String(txHash || "")
-      .trim();
+    String(
+      txHash || ""
+    ).trim();
 
   if (
-    !/^[a-fA-F0-9]{64}$/.test(hash)
+    !/^[a-fA-F0-9]{64}$/.test(
+      hash
+    )
   ) {
+
     return {
       status:
         "rejected",
@@ -760,23 +1433,31 @@ async function verifyUsdtPayment(
     )}`;
 
   const data =
-    await tronRequest(url);
+    await tronRequest(
+      url
+    );
 
   const transfers =
-    Array.isArray(data?.data)
+    Array.isArray(
+      data?.data
+    )
       ? data.data
       : [];
 
   const transfer =
     transfers.find(
-      (item) =>
+      item =>
         String(
-          item?.transaction_id || ""
+          item?.transaction_id ||
+          ""
         ).toLowerCase() ===
         hash.toLowerCase()
     );
 
-  if (!transfer) {
+  if (
+    !transfer
+  ) {
+
     return {
       status:
         "pending",
@@ -787,8 +1468,10 @@ async function verifyUsdtPayment(
   }
 
   const tokenAddress =
-    transfer?.token_info?.address ||
-    transfer?.contract_address ||
+    transfer?.token_info
+      ?.address ||
+    transfer
+      ?.contract_address ||
     "";
 
   if (
@@ -797,6 +1480,7 @@ async function verifyUsdtPayment(
       USDT_TRC20_CONTRACT
     )
   ) {
+
     return {
       status:
         "rejected",
@@ -812,6 +1496,7 @@ async function verifyUsdtPayment(
       TRC20_WALLET
     )
   ) {
+
     return {
       status:
         "rejected",
@@ -824,19 +1509,23 @@ async function verifyUsdtPayment(
   let actualUnits;
 
   try {
+
     actualUnits =
       BigInt(
         String(
-          transfer.value || "0"
+          transfer.value ||
+          "0"
         )
       );
+
   } catch {
+
     return {
       status:
         "rejected",
 
       reason:
-        "Invalid payment amount."
+        "Invalid transaction amount."
     };
   }
 
@@ -849,6 +1538,7 @@ async function verifyUsdtPayment(
     actualUnits <
     requiredUnits
   ) {
+
     return {
       status:
         "rejected",
@@ -863,6 +1553,7 @@ async function verifyUsdtPayment(
       transfer.block_timestamp
     )
   ) {
+
     return {
       status:
         "rejected",
@@ -873,6 +1564,7 @@ async function verifyUsdtPayment(
   }
 
   return {
+
     status:
       "confirmed",
 
@@ -880,8 +1572,11 @@ async function verifyUsdtPayment(
       hash,
 
     amount:
-      Number(actualUnits) /
-      10 ** USDT_DECIMALS,
+      Number(
+        actualUnits
+      ) /
+      10 **
+      USDT_DECIMALS,
 
     from:
       transfer.from,
@@ -903,434 +1598,382 @@ async function verifyUsdtPayment(
 }
 
 // ============================================================
-// SUBMIT PAYMENT
+// PUBLISH
 // ============================================================
 
 app.post(
-  "/api/payments/submit",
-  paymentLimiter,
+  "/api/publish",
   requireUser,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
+
     try {
-      requireFirebase();
 
-      const {
-        amount,
-        type,
-        txHash,
-        html,
-        prompt
-      } = req.body || {};
+      const html =
+        typeof req.body?.html ===
+        "string"
+          ? req.body.html
+          : "";
 
-      const plan =
-        getPlan(
-          type,
-          amount
+      const prompt =
+        typeof req.body?.prompt ===
+        "string"
+          ? req.body.prompt
+          : "";
+
+      if (
+        !html ||
+        !isHTML(html)
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Valid website HTML is required."
+        });
+      }
+
+      if (
+        html.length >
+        9000000
+      ) {
+
+        return res.status(
+          413
+        ).json({
+          error:
+            "Website HTML is too large."
+        });
+      }
+
+      const uid =
+        req.user.uid;
+
+      const usage =
+        await getUserUsage(
+          uid
         );
 
-      if (!plan) {
-        return res.status(400).json({
-          error:
-            "Invalid payment plan."
-        });
-      }
+      const published =
+        Number(
+          usage.websitesPublished ||
+          0
+        );
 
+      const paid =
+        await hasActivePaidPlan(
+          uid
+        );
+
+      /*
+       * First 3 publications are free.
+       */
       if (
-        !txHash ||
-        typeof txHash !==
-          "string"
+        published >=
+        FREE_WEBSITES &&
+        !paid
       ) {
-        return res.status(400).json({
+
+        return res.status(
+          402
+        ).json({
+
           error:
-            "Transaction hash is required."
+            "Your 3 free websites have been published. Purchase a plan to publish more.",
+
+          code:
+            "PUBLISH_PAYMENT_REQUIRED"
         });
       }
 
+      const publishId =
+        crypto.randomUUID();
+
+      const url =
+        `${PUBLIC_URL}/p/${publishId}`;
+
+      await db
+        .collection(
+          "published"
+        )
+        .doc(
+          publishId
+        )
+        .set({
+
+          html,
+
+          originalHtml:
+            html,
+
+          prompt,
+
+          userId:
+            uid,
+
+          email:
+            req.user.email ||
+            null,
+
+          createdAt:
+            Date.now(),
+
+          updatedAt:
+            Date.now(),
+
+          url,
+
+          mode:
+            published <
+            FREE_WEBSITES
+              ? "free"
+              : "paid"
+        });
+
+      await incrementUsage(
+        uid,
+        {
+          websitesPublished:
+            1
+        }
+      );
+
+      /*
+       * A single paid plan gives one
+       * publishing credit.
+       */
       if (
-        typeof html !== "string" ||
-        !html.trim()
+        published >=
+        FREE_WEBSITES &&
+        paid
       ) {
-        return res.status(400).json({
-          error:
-            "Website HTML is required."
-        });
-      }
 
-      const cleanHash =
-        txHash.trim();
+        const subSnap =
+          await db
+            .collection(
+              "subscriptions"
+            )
+            .doc(uid)
+            .get();
 
-      // Prevent duplicate transaction use.
-      const existing =
-        await db
-          .collection("payments")
-          .where(
-            "txHash",
-            "==",
-            cleanHash
-          )
-          .limit(5)
-          .get();
+        if (
+          subSnap.exists &&
+          subSnap.data()
+            .type ===
+            "single"
+        ) {
 
-      if (!existing.empty) {
-        const used =
-          existing.docs.some(
-            (doc) => {
-              const data =
-                doc.data();
-
-              return [
-                "pending",
-                "confirmed",
-                "approved"
-              ].includes(
-                data.status
-              );
-            }
+          await consumeSingleCredit(
+            uid
           );
-
-        if (used) {
-          return res.status(409).json({
-            error:
-              "This transaction hash has already been submitted."
-          });
         }
       }
 
-      const verification =
-        await verifyUsdtPayment(
-          cleanHash,
-          plan.amount
-        );
+      return res.json({
 
-      const paymentRef =
-        db
-          .collection("payments")
-          .doc();
+        ok:
+          true,
 
-      await paymentRef.set({
-        userId:
-          req.user.uid,
+        publishId,
 
-        email:
-          req.user.email || null,
+        url,
 
-        amount:
-          plan.amount,
-
-        type:
-          plan.type,
-
-        txHash:
-          cleanHash,
-
-        wallet:
-          TRC20_WALLET,
-
-        tokenContract:
-          USDT_TRC20_CONTRACT,
-
-        network:
-          "TRC20",
-
-        status:
-          verification.status,
-
-        verificationReason:
-          verification.reason || null,
-
-        verification:
-          verification.status ===
-          "confirmed"
-            ? verification
-            : null,
-
-        html,
-
-        prompt:
-          typeof prompt ===
-          "string"
-            ? prompt
-            : "",
-
-        createdAt:
-          FieldValue.serverTimestamp(),
-
-        updatedAt:
-          FieldValue.serverTimestamp()
-      });
-
-      if (
-        verification.status ===
-        "confirmed"
-      ) {
-        const subscription =
-          await activatePayment(
-            paymentRef,
-            verification
-          );
-
-        return res.json({
-          ok: true,
-
-          status:
-            "confirmed",
-
-          paymentId:
-            paymentRef.id,
-
-          subscription
-        });
-      }
-
-      return res.status(202).json({
-        ok: true,
-
-        status:
-          verification.status,
-
-        paymentId:
-          paymentRef.id,
-
-        message:
-          verification.reason ||
-          "Payment submitted. Automatic verification will continue."
+        mode:
+          published <
+          FREE_WEBSITES
+            ? "free"
+            : "paid"
       });
 
     } catch (error) {
+
       console.error(
-        "PAYMENT SUBMIT ERROR:",
+        "PUBLISH ERROR:",
         error
       );
 
       return res.status(
-        error.status || 500
+        error.status ||
+        500
       ).json({
         error:
           error.message ||
-          "Payment submission failed."
+          "Publishing failed."
       });
     }
   }
 );
 
 // ============================================================
-// PAYMENT STATUS
+// USAGE API
 // ============================================================
 
 app.get(
-  "/api/payments/:paymentId",
+  "/api/usage",
   requireUser,
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
+
     try {
-      requireFirebase();
 
-      const paymentRef =
-        db
-          .collection("payments")
-          .doc(
-            req.params.paymentId
-          );
+      const usage =
+        await getUserUsage(
+          req.user.uid
+        );
 
-      const snapshot =
-        await paymentRef.get();
-
-      if (!snapshot.exists) {
-        return res.status(404).json({
-          error:
-            "Payment not found."
-        });
-      }
-
-      const payment =
-        snapshot.data();
-
-      if (
-        payment.userId !==
-        req.user.uid
-      ) {
-        return res.status(403).json({
-          error:
-            "Not allowed."
-        });
-      }
-
-      if (
-        payment.status ===
-        "pending"
-      ) {
-        try {
-          const verification =
-            await verifyUsdtPayment(
-              payment.txHash,
-              payment.amount
-            );
-
-          if (
-            verification.status ===
-            "confirmed"
-          ) {
-            const subscription =
-              await activatePayment(
-                paymentRef,
-                verification
-              );
-
-            return res.json({
-              ok: true,
-
-              status:
-                "confirmed",
-
-              paymentId:
-                paymentRef.id,
-
-              subscription
-            });
-          }
-
-          if (
-            verification.status ===
-            "rejected"
-          ) {
-            await paymentRef.update({
-              status:
-                "rejected",
-
-              verificationReason:
-                verification.reason,
-
-              updatedAt:
-                FieldValue.serverTimestamp()
-            });
-
-            return res.json({
-              ok: true,
-
-              status:
-                "rejected",
-
-              paymentId:
-                paymentRef.id,
-
-              reason:
-                verification.reason
-            });
-          }
-        } catch (verificationError) {
-          console.error(
-            "PAYMENT RECHECK ERROR:",
-            verificationError.message
-          );
-
-          // Don't destroy the pending payment
-          // merely because TronGrid temporarily failed.
-        }
-      }
-
-      const updated =
-        await paymentRef.get();
-
-      const data =
-        updated.data();
+      const paid =
+        await hasActivePaidPlan(
+          req.user.uid
+        );
 
       return res.json({
-        ok: true,
 
-        status:
-          data.status,
+        ok:
+          true,
 
-        paymentId:
-          paymentRef.id,
+        usage,
 
-        reason:
-          data.verificationReason ||
-          null
+        freeWebsitesRemaining:
+          paid
+            ? 0
+            : Math.max(
+                0,
+                FREE_WEBSITES -
+                Number(
+                  usage.websitesPublished ||
+                  0
+                )
+              ),
+
+        freeEditsRemaining:
+          paid
+            ? 0
+            : Math.max(
+                0,
+                FREE_EDITS -
+                Number(
+                  usage.edits ||
+                  0
+                )
+              ),
+
+        paid
       });
 
     } catch (error) {
+
       console.error(
-        "PAYMENT STATUS ERROR:",
+        "USAGE ERROR:",
         error
       );
 
-      return res.status(500).json({
+      return res.status(
+        500
+      ).json({
         error:
-          "Could not check payment status."
+          "Unable to read usage."
       });
     }
   }
 );
 
 // ============================================================
-// ACTIVATE PAYMENT
+// PAYMENT ACTIVATION
 // ============================================================
 
 async function activatePayment(
   paymentRef,
   verification
 ) {
+
   requireFirebase();
 
-  const paymentSnapshot =
+  const paymentSnap =
     await paymentRef.get();
 
   if (
-    !paymentSnapshot.exists
+    !paymentSnap.exists
   ) {
+
     throw new Error(
-      "Payment record does not exist."
+      "Payment not found."
     );
   }
 
   const payment =
-    paymentSnapshot.data();
+    paymentSnap.data();
+
+  const uid =
+    payment.userId;
+
+  const now =
+    Date.now();
 
   const subscriptionRef =
     db
-      .collection("subscriptions")
-      .doc(
-        payment.userId
-      );
+      .collection(
+        "subscriptions"
+      )
+      .doc(uid);
 
   let result;
 
   await db.runTransaction(
-    async (transaction) => {
-      const freshSnapshot =
+    async transaction => {
+
+      const freshPaymentSnap =
         await transaction.get(
           paymentRef
         );
 
-      if (!freshSnapshot.exists) {
+      if (
+        !freshPaymentSnap.exists
+      ) {
+
         throw new Error(
-          "Payment record does not exist."
+          "Payment not found."
         );
       }
 
       const freshPayment =
-        freshSnapshot.data();
+        freshPaymentSnap.data();
 
-      // Idempotency protection
+      /*
+       * Already activated.
+       */
       if (
         freshPayment.status ===
         "approved"
       ) {
+
         result = {
+          alreadyActivated:
+            true,
+
           type:
             freshPayment.type,
 
           amount:
-            freshPayment.amount,
-
-          alreadyActivated:
-            true
+            freshPayment.amount
         };
 
         return;
       }
 
-      const now =
-        Date.now();
+      const existingSnap =
+        await transaction.get(
+          subscriptionRef
+        );
+
+      const existing =
+        existingSnap.exists
+          ? existingSnap.data()
+          : {};
 
       let subscription;
 
@@ -1338,17 +1981,9 @@ async function activatePayment(
         freshPayment.type ===
         "single"
       ) {
-        const existingSnapshot =
-          await transaction.get(
-            subscriptionRef
-          );
-
-        const existing =
-          existingSnapshot.exists
-            ? existingSnapshot.data()
-            : {};
 
         subscription = {
+
           type:
             "single",
 
@@ -1357,7 +1992,8 @@ async function activatePayment(
 
           credits:
             Number(
-              existing.credits || 0
+              existing.credits ||
+              0
             ) + 1,
 
           activatedAt:
@@ -1374,7 +2010,9 @@ async function activatePayment(
         freshPayment.type ===
         "monthly"
       ) {
+
         subscription = {
+
           type:
             "monthly",
 
@@ -1384,10 +2022,10 @@ async function activatePayment(
           expiresAt:
             now +
             30 *
-              24 *
-              60 *
-              60 *
-              1000,
+            24 *
+            60 *
+            60 *
+            1000,
 
           activatedAt:
             now,
@@ -1403,7 +2041,9 @@ async function activatePayment(
         freshPayment.type ===
         "lifetime"
       ) {
+
         subscription = {
+
           type:
             "lifetime",
 
@@ -1422,7 +2062,9 @@ async function activatePayment(
           lastTxHash:
             freshPayment.txHash
         };
+
       } else {
+
         throw new Error(
           "Unknown payment type."
         );
@@ -1432,13 +2074,15 @@ async function activatePayment(
         subscriptionRef,
         subscription,
         {
-          merge: true
+          merge:
+            true
         }
       );
 
       transaction.update(
         paymentRef,
         {
+
           status:
             "approved",
 
@@ -1464,14 +2108,419 @@ async function activatePayment(
 }
 
 // ============================================================
-// AUTOMATIC BACKGROUND PAYMENT CHECK
+// PAYMENT SUBMISSION
 // ============================================================
 
-let paymentScanRunning = false;
+app.post(
+  "/api/payments/submit",
+  paymentLimiter,
+  requireUser,
+  async (
+    req,
+    res
+  ) => {
+
+    try {
+
+      const {
+        amount,
+        type,
+        txHash,
+        html,
+        prompt
+      } =
+        req.body || {};
+
+      const plan =
+        getPlan(
+          type,
+          amount
+        );
+
+      if (!plan) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Invalid payment plan."
+        });
+      }
+
+      if (
+        !txHash ||
+        typeof txHash !==
+        "string"
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Transaction hash is required."
+        });
+      }
+
+      if (
+        !html ||
+        typeof html !==
+        "string"
+      ) {
+
+        return res.status(
+          400
+        ).json({
+          error:
+            "Website HTML is required."
+        });
+      }
+
+      const cleanHash =
+        txHash.trim();
+
+      const existing =
+        await db
+          .collection(
+            "payments"
+          )
+          .where(
+            "txHash",
+            "==",
+            cleanHash
+          )
+          .limit(5)
+          .get();
+
+      if (
+        !existing.empty
+      ) {
+
+        const alreadyUsed =
+          existing.docs.some(
+            doc =>
+              [
+                "pending",
+                "confirmed",
+                "approved"
+              ].includes(
+                doc.data()
+                  .status
+              )
+          );
+
+        if (
+          alreadyUsed
+        ) {
+
+          return res.status(
+            409
+          ).json({
+            error:
+              "This transaction hash has already been submitted."
+          });
+        }
+      }
+
+      const verification =
+        await verifyUsdtPayment(
+          cleanHash,
+          plan.amount
+        );
+
+      const paymentRef =
+        db
+          .collection(
+            "payments"
+          )
+          .doc();
+
+      await paymentRef.set({
+
+        userId:
+          req.user.uid,
+
+        email:
+          req.user.email ||
+          null,
+
+        amount:
+          plan.amount,
+
+        type:
+          plan.type,
+
+        txHash:
+          cleanHash,
+
+        wallet:
+          TRC20_WALLET,
+
+        tokenContract:
+          USDT_TRC20_CONTRACT,
+
+        network:
+          "TRC20",
+
+        status:
+          verification.status,
+
+        verificationReason:
+          verification.reason ||
+          null,
+
+        verification:
+          verification.status ===
+          "confirmed"
+            ? verification
+            : null,
+
+        html,
+
+        prompt,
+
+        createdAt:
+          FieldValue.serverTimestamp(),
+
+        updatedAt:
+          FieldValue.serverTimestamp()
+      });
+
+      if (
+        verification.status ===
+        "confirmed"
+      ) {
+
+        const subscription =
+          await activatePayment(
+            paymentRef,
+            verification
+          );
+
+        return res.json({
+
+          ok:
+            true,
+
+          status:
+            "confirmed",
+
+          paymentId:
+            paymentRef.id,
+
+          subscription
+        });
+      }
+
+      return res.status(
+        202
+      ).json({
+
+        ok:
+          true,
+
+        status:
+          verification.status,
+
+        paymentId:
+          paymentRef.id,
+
+        message:
+          verification.reason ||
+          "Payment submitted. Automatic verification will continue."
+      });
+
+    } catch (error) {
+
+      console.error(
+        "PAYMENT SUBMIT ERROR:",
+        error
+      );
+
+      return res.status(
+        error.status ||
+        500
+      ).json({
+        error:
+          error.message ||
+          "Payment submission failed."
+      });
+    }
+  }
+);
+
+// ============================================================
+// PAYMENT STATUS
+// ============================================================
+
+app.get(
+  "/api/payments/:paymentId",
+  requireUser,
+  async (
+    req,
+    res
+  ) => {
+
+    try {
+
+      const paymentRef =
+        db
+          .collection(
+            "payments"
+          )
+          .doc(
+            req.params
+              .paymentId
+          );
+
+      const snap =
+        await paymentRef.get();
+
+      if (
+        !snap.exists
+      ) {
+
+        return res.status(
+          404
+        ).json({
+          error:
+            "Payment not found."
+        });
+      }
+
+      const payment =
+        snap.data();
+
+      if (
+        payment.userId !==
+        req.user.uid
+      ) {
+
+        return res.status(
+          403
+        ).json({
+          error:
+            "Not allowed."
+        });
+      }
+
+      if (
+        payment.status ===
+        "pending"
+      ) {
+
+        try {
+
+          const verification =
+            await verifyUsdtPayment(
+              payment.txHash,
+              payment.amount
+            );
+
+          if (
+            verification.status ===
+            "confirmed"
+          ) {
+
+            const subscription =
+              await activatePayment(
+                paymentRef,
+                verification
+              );
+
+            return res.json({
+
+              ok:
+                true,
+
+              status:
+                "approved",
+
+              subscription
+            });
+          }
+
+          if (
+            verification.status ===
+            "rejected"
+          ) {
+
+            await paymentRef.update({
+
+              status:
+                "rejected",
+
+              verificationReason:
+                verification.reason,
+
+              updatedAt:
+                FieldValue.serverTimestamp()
+            });
+
+            return res.json({
+
+              ok:
+                true,
+
+              status:
+                "rejected",
+
+              reason:
+                verification.reason
+            });
+          }
+
+        } catch (
+          verificationError
+        ) {
+
+          console.error(
+            "PAYMENT VERIFY ERROR:",
+            verificationError.message
+          );
+        }
+      }
+
+      return res.json({
+
+        ok:
+          true,
+
+        status:
+          payment.status,
+
+        reason:
+          payment.verificationReason ||
+          null
+      });
+
+    } catch (error) {
+
+      console.error(
+        "PAYMENT STATUS ERROR:",
+        error
+      );
+
+      return res.status(
+        500
+      ).json({
+        error:
+          "Unable to check payment status."
+      });
+    }
+  }
+);
+
+// ============================================================
+// BACKGROUND PAYMENT CHECK
+// ============================================================
+
+let paymentCheckRunning =
+  false;
 
 async function processPendingPayments() {
+
   if (
-    paymentScanRunning
+    paymentCheckRunning
   ) {
     return;
   }
@@ -1483,12 +2532,16 @@ async function processPendingPayments() {
     return;
   }
 
-  paymentScanRunning = true;
+  paymentCheckRunning =
+    true;
 
   try {
+
     const snapshot =
       await db
-        .collection("payments")
+        .collection(
+          "payments"
+        )
         .where(
           "status",
           "==",
@@ -1498,12 +2551,15 @@ async function processPendingPayments() {
         .get();
 
     for (
-      const doc of snapshot.docs
+      const doc
+      of snapshot.docs
     ) {
-      const payment =
-        doc.data();
 
       try {
+
+        const payment =
+          doc.data();
+
         const verification =
           await verifyUsdtPayment(
             payment.txHash,
@@ -1514,6 +2570,7 @@ async function processPendingPayments() {
           verification.status ===
           "confirmed"
         ) {
+
           await activatePayment(
             doc.ref,
             verification
@@ -1528,7 +2585,9 @@ async function processPendingPayments() {
           verification.status ===
           "rejected"
         ) {
+
           await doc.ref.update({
+
             status:
               "rejected",
 
@@ -1538,14 +2597,10 @@ async function processPendingPayments() {
             updatedAt:
               FieldValue.serverTimestamp()
           });
-
-          console.log(
-            "PAYMENT REJECTED:",
-            doc.id
-          );
         }
 
       } catch (error) {
+
         console.error(
           "PAYMENT CHECK ERROR:",
           doc.id,
@@ -1555,247 +2610,90 @@ async function processPendingPayments() {
     }
 
   } catch (error) {
+
     console.error(
       "PAYMENT SCAN ERROR:",
       error.message
     );
+
   } finally {
-    paymentScanRunning = false;
+
+    paymentCheckRunning =
+      false;
   }
 }
 
 // ============================================================
-// SECURE PUBLISH
+// PUBLIC PUBLISHED WEBSITE
 // ============================================================
-
-app.post(
-  "/api/publish",
-  requireUser,
-  async (req, res) => {
-    try {
-      requireFirebase();
-
-      const {
-        html,
-        prompt
-      } = req.body || {};
-
-      if (
-        !html ||
-        typeof html !==
-          "string"
-      ) {
-        return res.status(400).json({
-          error:
-            "HTML is required."
-        });
-      }
-
-      if (html.length > 10 * 1024 * 1024) {
-        return res.status(400).json({
-          error:
-            "Website HTML is too large."
-        });
-      }
-
-      const subscriptionRef =
-        db
-          .collection("subscriptions")
-          .doc(
-            req.user.uid
-          );
-
-      const subscriptionSnapshot =
-        await subscriptionRef.get();
-
-      if (
-        !subscriptionSnapshot.exists
-      ) {
-        return res.status(402).json({
-          error:
-            "No active publishing plan."
-        });
-      }
-
-      const subscription =
-        subscriptionSnapshot.data();
-
-      const now =
-        Date.now();
-
-      if (
-        subscription.type ===
-          "monthly" &&
-        (
-          !subscription.expiresAt ||
-          Number(
-            subscription.expiresAt
-          ) <= now
-        )
-      ) {
-        return res.status(402).json({
-          error:
-            "Your monthly plan has expired."
-        });
-      }
-
-      if (
-        subscription.type ===
-        "single" &&
-        Number(
-          subscription.credits || 0
-        ) <= 0
-      ) {
-        return res.status(402).json({
-          error:
-            "No publishing credits remaining."
-        });
-      }
-
-      if (
-        ![
-          "single",
-          "monthly",
-          "lifetime"
-        ].includes(
-          subscription.type
-        )
-      ) {
-        return res.status(402).json({
-          error:
-            "Invalid publishing subscription."
-        });
-      }
-
-      const publishId =
-        crypto.randomUUID();
-
-      const url =
-        `${PUBLIC_URL}/p/${publishId}`;
-
-      await db
-        .collection("published")
-        .doc(publishId)
-        .set({
-          html,
-
-          originalHtml:
-            html,
-
-          prompt:
-            typeof prompt ===
-            "string"
-              ? prompt
-              : "",
-
-          userId:
-            req.user.uid,
-
-          email:
-            req.user.email ||
-            null,
-
-          createdAt:
-            now,
-
-          updatedAt:
-            now,
-
-          url,
-
-          subType:
-            subscription.type
-        });
-
-      if (
-        subscription.type ===
-        "single"
-      ) {
-        await subscriptionRef.update({
-          credits:
-            FieldValue.increment(-1),
-
-          updatedAt:
-            now
-        });
-      }
-
-      return res.json({
-        ok: true,
-
-        publishId,
-
-        url
-      });
-
-    } catch (error) {
-      console.error(
-        "PUBLISH ERROR:",
-        error
-      );
-
-      return res.status(500).json({
-        error:
-          error.message ||
-          "Publishing failed."
-      });
-    }
-  }
-);
-
-// ============================================================
-// SERVE PUBLISHED WEBSITES
-// ============================================================
-//
-// THIS IS IMPORTANT.
-//
-// /api/* -> API
-// /p/:id -> saved website
-// everything else -> frontend
 
 app.get(
   "/p/:publishId",
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
+
     try {
+
       requireFirebase();
 
       const publishId =
         String(
-          req.params.publishId || ""
+          req.params
+            .publishId ||
+          ""
         ).trim();
 
       if (
-        !publishId ||
-        publishId.length > 100
+        !publishId
       ) {
-        return res.status(400).send(
-          "Invalid published website."
+
+        return res.status(
+          400
+        ).send(
+          "Invalid website."
         );
       }
 
-      const snapshot =
+      const snap =
         await db
-          .collection("published")
-          .doc(publishId)
+          .collection(
+            "published"
+          )
+          .doc(
+            publishId
+          )
           .get();
 
-      if (!snapshot.exists) {
-        return res.status(404).send(
-          "Published website not found."
+      if (
+        !snap.exists
+      ) {
+
+        return res.status(
+          404
+        ).send(
+          "Website not found."
         );
       }
 
       const data =
-        snapshot.data();
+        snap.data();
 
       const html =
-        typeof data.html === "string"
+        typeof data.html ===
+        "string"
           ? data.html
           : "";
 
-      if (!html) {
-        return res.status(404).send(
-          "Published website is empty."
+      if (
+        !html
+      ) {
+
+        return res.status(
+          404
+        ).send(
+          "Website is empty."
         );
       }
 
@@ -1809,16 +2707,21 @@ app.get(
         "public, max-age=60"
       );
 
-      return res.send(html);
+      return res.send(
+        html
+      );
 
     } catch (error) {
+
       console.error(
-        "PUBLISHED SITE ERROR:",
+        "PUBLIC WEBSITE ERROR:",
         error
       );
 
-      return res.status(500).send(
-        "Could not load published website."
+      return res.status(
+        500
+      ).send(
+        "Unable to load website."
       );
     }
   }
@@ -1827,99 +2730,119 @@ app.get(
 // ============================================================
 // API 404
 // ============================================================
-//
-// This MUST come before the frontend fallback.
 
 app.use(
   "/api",
-  (req, res) => {
-    return res.status(404).json({
+  (
+    req,
+    res
+  ) => {
+
+    return res.status(
+      404
+    ).json({
       error:
-        "API endpoint not found."
+        "API endpoint not found.",
+      path:
+        req.originalUrl
     });
   }
 );
 
 // ============================================================
-// FRONTEND SPA FALLBACK
+// FRONTEND FALLBACK
 // ============================================================
 //
-// IMPORTANT:
+// Only browser HTML requests reach this.
 //
-// DO NOT use:
+// API requests and /p/ requests are excluded.
 //
-// app.get("*", ...)
-//
-// with newer Express versions.
-//
-// Instead use a final middleware and explicitly
-// avoid API/published routes.
 
 app.use(
-  (req, res, next) => {
-    const acceptsHtml =
-      req.headers.accept &&
-      req.headers.accept.includes(
-        "text/html"
+  (
+    req,
+    res,
+    next
+  ) => {
+
+    if (
+      req.method !==
+      "GET" &&
+      req.method !==
+      "HEAD"
+    ) {
+
+      return next();
+    }
+
+    if (
+      req.path.startsWith(
+        "/api"
+      )
+    ) {
+
+      return next();
+    }
+
+    if (
+      req.path.startsWith(
+        "/p/"
+      )
+    ) {
+
+      return next();
+    }
+
+    const accept =
+      String(
+        req.headers.accept ||
+        ""
       );
 
     if (
-      req.method !== "GET" &&
-      req.method !== "HEAD"
+      !accept.includes(
+        "text/html"
+      )
     ) {
+
       return next();
     }
 
     if (
-      req.path.startsWith("/api/")
+      !fs.existsSync(
+        INDEX_FILE
+      )
     ) {
-      return next();
-    }
 
-    if (
-      req.path.startsWith("/p/")
-    ) {
-      return next();
-    }
-
-    if (!acceptsHtml) {
-      return next();
+      return res.status(
+        404
+      ).send(
+        "Frontend index.html was not found."
+      );
     }
 
     return res.sendFile(
-      INDEX_FILE,
-      (error) => {
-        if (error) {
-          console.error(
-            "FRONTEND SEND ERROR:",
-            error
-          );
-
-          return next(error);
-        }
-      }
+      INDEX_FILE
     );
   }
 );
 
 // ============================================================
-// GENERAL 404
+// FINAL 404
 // ============================================================
 
 app.use(
-  (req, res) => {
-    if (
-      req.path.startsWith("/api/")
-    ) {
-      return res.status(404).json({
-        error:
-          "Not found."
-      });
-    }
+  (
+    req,
+    res
+  ) => {
 
-    return res.status(404).send(
-      "Page not found."
-    );
+    return res.status(
+      404
+    ).json({
+      error:
+        "Route not found."
+    });
   }
 );
 
@@ -1928,33 +2851,34 @@ app.use(
 // ============================================================
 
 app.use(
-  (error, req, res, next) => {
+  (
+    error,
+    req,
+    res,
+    next
+  ) => {
+
     console.error(
-      "UNHANDLED SERVER ERROR:",
+      "UNHANDLED ERROR:",
       error
     );
 
-    if (res.headersSent) {
-      return next(error);
-    }
-
     if (
-      req.path.startsWith("/api/")
+      res.headersSent
     ) {
-      return res.status(
-        error.status || 500
-      ).json({
-        error:
-          error.message ||
-          "Internal server error."
-      });
+      return next(
+        error
+      );
     }
 
     return res.status(
-      error.status || 500
-    ).send(
-      "Internal server error."
-    );
+      error.status ||
+      500
+    ).json({
+      error:
+        error.message ||
+        "Internal server error."
+    });
   }
 );
 
@@ -1965,36 +2889,44 @@ app.use(
 const server =
   app.listen(
     PORT,
+    "0.0.0.0",
     () => {
+
       console.log("");
       console.log(
-        "=============================================="
+        "=========================================="
       );
       console.log(
-        `WALKER WEBS running on port ${PORT}`
+        "WALKER WEBS SERVER ONLINE"
+      );
+      console.log(
+        "=========================================="
+      );
+      console.log(
+        `Listening on port ${PORT}`
+      );
+      console.log(
+        `Health endpoint: /api/health`
       );
       console.log(
         `Frontend: ${PUBLIC_URL}`
       );
       console.log(
-        `Health: ${PUBLIC_URL}/api/health`
+        `Firebase: ${Boolean(db)}`
+      );
+      console.log(
+        `Groq: ${Boolean(GROQ_KEY)}`
+      );
+      console.log(
+        `TRON verification: ${Boolean(
+          TRONGRID_API_KEY
+        )}`
       );
       console.log(
         `Payment wallet: ${TRC20_WALLET}`
       );
       console.log(
-        `TRON API: ${TRONGRID_URL}`
-      );
-      console.log(
-        `Firebase Admin: ${Boolean(db)}`
-      );
-      console.log(
-        `Automatic payment verification: ${Boolean(
-          TRONGRID_API_KEY
-        )}`
-      );
-      console.log(
-        "=============================================="
+        "=========================================="
       );
       console.log("");
     }
@@ -2007,46 +2939,57 @@ const server =
 function shutdown(
   signal
 ) {
+
   console.log(
-    `${signal} received. Shutting down...`
+    `${signal} received.`
   );
 
   server.close(
     () => {
+
       console.log(
-        "Server closed."
+        "Server stopped."
       );
 
-      process.exit(0);
+      process.exit(
+        0
+      );
     }
   );
 }
 
 process.on(
   "SIGTERM",
-  () => shutdown("SIGTERM")
+  () =>
+    shutdown(
+      "SIGTERM"
+    )
 );
 
 process.on(
   "SIGINT",
-  () => shutdown("SIGINT")
+  () =>
+    shutdown(
+      "SIGINT"
+    )
 );
 
 // ============================================================
-// BACKGROUND PAYMENT CHECK
+// BACKGROUND PAYMENT MONITOR
 // ============================================================
 
 if (
   db &&
   TRONGRID_API_KEY
 ) {
-  setInterval(
-    processPendingPayments,
-    30 * 1000
-  );
 
   setTimeout(
     processPendingPayments,
     5000
+  );
+
+  setInterval(
+    processPendingPayments,
+    30 * 1000
   );
 }
