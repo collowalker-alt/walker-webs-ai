@@ -1,12 +1,24 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const rateLimit = require('express-rate-limit'); // <-- ADDED
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json({limit: '10mb'}));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// ===== RATE LIMIT: 100 requests per 15 minutes per IP =====
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, 
+  message: { error: "Rate limit reached. Please wait 15 minutes." },
+  standardHeaders: true, 
+  legacyHeaders: false,
+});
+app.use('/api/generate', limiter); // <-- APPLY ONLY TO AI ROUTE
+// ==========================================================
 
 // READ KEY FROM RENDER ENVIRONMENT
 const GROQ_KEY = process.env.GROQ_KEY;
