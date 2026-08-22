@@ -7,11 +7,15 @@ const admin = require("firebase-admin");
 
 const app = express();
 
+/* ============================================================
+   SERVER
+============================================================ */
+
 const PORT = Number(process.env.PORT || 10000);
 const HOST = process.env.HOST || "0.0.0.0";
 
 /* ============================================================
-   CONFIGURATION
+   PLANS
 ============================================================ */
 
 const PLANS = {
@@ -31,48 +35,33 @@ const PLANS = {
   }
 };
 
-/*
- * Official TRON USDT contract.
- */
-const USDT_TRC20_CONTRACT =
-  String(
-    process.env.USDT_TRC20_CONTRACT ||
-      "TXLAQ63Xg1NAzckPwKHZzw7CSEmLMEqcdj"
-  ).trim();
+/* ============================================================
+   TRON CONFIGURATION
+============================================================ */
+
+const TRONGRID_BASE_URL = String(
+  process.env.TRONGRID_BASE_URL ||
+    "https://api.trongrid.io"
+)
+  .trim()
+  .replace(/\/+$/, "");
+
+const TRONGRID_API_KEY = String(
+  process.env.TRONGRID_API_KEY || ""
+).trim();
+
+const TRC20_WALLET = String(
+  process.env.TRC20_WALLET || ""
+).trim();
 
 /*
- * TRON Grid base URL.
+ * USDT TRC20 contract.
  */
-const TRONGRID_BASE_URL =
-  String(
-    process.env.TRONGRID_BASE_URL ||
-      "https://api.trongrid.io"
-  )
-    .trim()
-    .replace(/\/+$/, "");
+const USDT_TRC20_CONTRACT = String(
+  process.env.USDT_TRC20_CONTRACT ||
+    "TXLAQ63Xg1NAzckPwKHZzw7CSEmLMEqcdj"
+).trim();
 
-/*
- * How often the payment scanner runs.
- */
-const PAYMENT_SCAN_INTERVAL_MS = Math.max(
-  15000,
-  Number(process.env.PAYMENT_SCAN_INTERVAL_MS || 30000)
-);
-
-/*
- * Maximum pending payments checked during one scan.
- */
-const PAYMENT_SCAN_LIMIT = Math.max(
-  1,
-  Math.min(
-    200,
-    Number(process.env.PAYMENT_SCAN_LIMIT || 50)
-  )
-);
-
-/*
- * Maximum number of TRON API retries.
- */
 const TRON_RETRY_COUNT = Math.max(
   1,
   Math.min(
@@ -81,6 +70,18 @@ const TRON_RETRY_COUNT = Math.max(
   )
 );
 
+const PAYMENT_SCAN_INTERVAL_MS = Math.max(
+  30000,
+  Number(process.env.PAYMENT_SCAN_INTERVAL_MS || 60000)
+);
+
+const PAYMENT_SCAN_LIMIT = Math.max(
+  1,
+  Math.min(
+    100,
+    Number(process.env.PAYMENT_SCAN_LIMIT || 50)
+  )
+);
 
 /* ============================================================
    ENVIRONMENT
@@ -96,36 +97,26 @@ function normalizePrivateKey(value) {
   return String(value || "").replace(/\\n/g, "\n");
 }
 
-function missingRequiredEnv() {
-  return requiredEnv.filter(
-    (key) =>
-      !String(process.env[key] || "").trim()
-  );
-}
+const missingEnv = requiredEnv.filter(
+  (key) => !String(process.env[key] || "").trim()
+);
 
-const missing = missingRequiredEnv();
+const aiConfigured = Boolean(
+  process.env.GROQ_KEY
+);
 
-const firebaseConfigured =
-  missing.length === 0;
-
-const tronConfigured =
-  Boolean(
-    process.env.TRONGRID_API_KEY &&
-    process.env.TRC20_WALLET
-  );
-
-const aiConfigured =
-  Boolean(process.env.GROQ_KEY);
-
+const tronConfigured = Boolean(
+  TRONGRID_API_KEY && TRC20_WALLET
+);
 
 /* ============================================================
-   FIREBASE ADMIN
+   FIREBASE
 ============================================================ */
 
 let db = null;
 let firebaseReady = false;
 
-if (firebaseConfigured) {
+if (missingEnv.length === 0) {
   try {
     if (!admin.apps.length) {
       admin.initializeApp({
@@ -146,9 +137,6 @@ if (firebaseConfigured) {
 
     db = admin.firestore();
 
-    /*
-     * Firestore gRPC retry settings.
-     */
     db.settings({
       ignoreUndefinedProperties: true
     });
@@ -163,68 +151,23 @@ if (firebaseConfigured) {
 
     console.error(
       "Firebase initialization failed:",
-      error
+      error.message
     );
   }
 } else {
   console.warn(
-    "Firebase Admin is not initialized."
+    "Firebase is not configured."
   );
 
   console.warn(
-    "Missing:",
-    missing.join(", ")
+    "Missing environment variables:",
+    missingEnv.join(", ")
   );
 }
-
 
 /* ============================================================
    CORS
 ============================================================ */
-
-const allowedOrigins =
-  new Set([
-    "https://walker-webs.web.app",
-    "https://walker-webs.firebaseapp.com",
-    "https://walker-webs-ai.onrender.com",
-
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5500",
-    "http://127.0.0.1:5500"
-  ]);
-
-function isAllowedOrigin(origin) {
-  /*
-   * Requests such as curl/health checks have no Origin.
-   */
-  if (!origin) {
-    return true;
-  }
-
-  if (allowedOrigins.has(origin)) {
-    return true;
-  }
-
-  try {
-    const url =
-      new URL(origin);
-
-    const hostname =
-      url.hostname;
-
-    if (
-      hostname.endsWith(".web.app") ||
-      hostname.endsWith(".firebaseapp.com")
-    ) {
-      return true;
-    }
-  } catch (_) {
-    return false;
-  }
-
-  return false;
-}
 
 /*
  * IMPORTANT:
@@ -233,15 +176,98 @@ function isAllowedOrigin(origin) {
  *
  * app.options("*", cors());
  *
- * Newer Express/router versions reject "*" with
- * path-to-regexp.
+ * Express 5 can throw:
+ *
+ * PathError [TypeError]:
+ * Missing parameter name at index 1: *
+ *
+ * The normal cors middleware below already handles OPTIONS.
  */
+
+const allowedOrigins = new Set([
+  "https://walker-webs.web.app",
+  "https://walker-webs.firebaseapp.com",
+  "https://walker-webs-ai.onrender.com",
+
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5500",
+  "http://127.0.0.1:5500"
+]);
+
+function isAllowedOrigin(origin) {
+  /*
+   * No Origin:
+   * curl, server-to-server requests, Render health checks, etc.
+   */
+  if (!origin) {
+    return true;
+  }
+
+  /*
+   * Local HTML files can send:
+   *
+   * Origin: null
+   *
+   * Allow it so the frontend does not receive:
+   *
+   * CORS blocked this origin: null
+   */
+  if (origin === "null") {
+    return true;
+  }
+
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+
+    const hostname = url.hostname;
+
+    /*
+     * Firebase Hosting domains.
+     */
+    if (
+      hostname.endsWith(".web.app") ||
+      hostname.endsWith(".firebaseapp.com")
+    ) {
+      return true;
+    }
+
+    /*
+     * Optional custom frontend URL.
+     */
+    const configuredFrontend =
+      String(
+        process.env.FRONTEND_URL || ""
+      ).trim();
+
+    if (
+      configuredFrontend &&
+      origin === configuredFrontend
+    ) {
+      return true;
+    }
+
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 app.use(
   cors({
     origin(origin, callback) {
       if (isAllowedOrigin(origin)) {
         return callback(null, true);
       }
+
+      console.warn(
+        "CORS blocked origin:",
+        origin
+      );
 
       return callback(
         new Error(
@@ -273,7 +299,6 @@ app.use(
   })
 );
 
-
 /* ============================================================
    BODY PARSING
 ============================================================ */
@@ -291,15 +316,13 @@ app.use(
   })
 );
 
-
 /* ============================================================
    REQUEST LOGGING
 ============================================================ */
 
 app.use(
   (req, res, next) => {
-    const started =
-      Date.now();
+    const started = Date.now();
 
     res.on(
       "finish",
@@ -314,16 +337,25 @@ app.use(
   }
 );
 
-
 /* ============================================================
-   GENERAL HELPERS
+   HELPERS
 ============================================================ */
 
 function sleep(ms) {
-  return new Promise(
-    (resolve) =>
-      setTimeout(resolve, ms)
-  );
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function safeNumber(
+  value,
+  fallback = 0
+) {
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
 function isNotFoundError(error) {
@@ -331,65 +363,29 @@ function isNotFoundError(error) {
     return false;
   }
 
-  const code =
-    error.code;
+  const code = error.code;
 
-  const message =
-    String(
-      error.message || ""
-    ).toUpperCase();
+  const message = String(
+    error.message || ""
+  ).toUpperCase();
 
   return (
     code === 5 ||
     code === "5" ||
     code === "NOT_FOUND" ||
-    message.includes(
-      "5 NOT_FOUND"
-    ) ||
-    message.includes(
-      "NOT_FOUND"
-    )
-  );
-}
-
-function isFirestoreError(error) {
-  if (!error) {
-    return false;
-  }
-
-  return (
-    typeof error.code ===
-      "number" ||
-    typeof error.code ===
-      "string"
-  );
-}
-
-function safeNumber(value, fallback = 0) {
-  const n =
-    Number(value);
-
-  return Number.isFinite(n)
-    ? n
-    : fallback;
-}
-
-function validTxHash(txHash) {
-  return /^[a-fA-F0-9]{64}$/.test(
-    String(txHash || "").trim()
+    message.includes("5 NOT_FOUND") ||
+    message.includes("NOT_FOUND")
   );
 }
 
 function isHTML(value) {
-  const lower =
-    String(value || "")
-      .toLowerCase();
+  const html = String(
+    value || ""
+  ).toLowerCase();
 
   return (
-    lower.includes(
-      "<!doctype html"
-    ) ||
-    lower.includes("<html")
+    html.includes("<!doctype html") ||
+    html.includes("<html")
   );
 }
 
@@ -410,38 +406,28 @@ function cleanAIHtml(value) {
     .trim();
 }
 
+function validTxHash(txHash) {
+  return /^[a-fA-F0-9]{64}$/.test(
+    String(txHash || "").trim()
+  );
+}
 
 /* ============================================================
    HEALTH
 ============================================================ */
 
-app.get(
-  "/",
-  (_req, res) => {
-    res.json({
-      ok: true,
-      service:
-        "walker-webs-backend",
-      status: "online",
-      health:
-        "/api/health"
-    });
-  }
-);
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "walker-webs-backend",
+    status: "online",
+    health: "/api/health"
+  });
+});
 
 app.get(
   "/api/health",
-  async (_req, res) => {
-    let firestoreStatus =
-      firebaseReady
-        ? "configured"
-        : "not_configured";
-
-    /*
-     * We don't make health depend on Firestore being readable.
-     * This prevents Render health checks from failing simply
-     * because Firestore is temporarily unavailable.
-     */
+  (_req, res) => {
     res.status(200).json({
       ok: true,
 
@@ -455,7 +441,9 @@ app.get(
         firebaseReady,
 
       firestore:
-        firestoreStatus,
+        firebaseReady
+          ? "configured"
+          : "not_configured",
 
       groq:
         aiConfigured,
@@ -464,12 +452,10 @@ app.get(
         tronConfigured,
 
       walletConfigured:
-        Boolean(
-          process.env.TRC20_WALLET
-        ),
+        Boolean(TRC20_WALLET),
 
       wallet:
-        process.env.TRC20_WALLET
+        TRC20_WALLET
           ? "configured"
           : "missing",
 
@@ -480,8 +466,8 @@ app.get(
         3,
 
       paymentScanner:
-        tronConfigured &&
-        firebaseReady
+        firebaseReady &&
+        tronConfigured
           ? "enabled"
           : "disabled",
 
@@ -491,9 +477,8 @@ app.get(
   }
 );
 
-
 /* ============================================================
-   FIREBASE AUTH
+   AUTH
 ============================================================ */
 
 async function requireAuth(
@@ -505,18 +490,18 @@ async function requireAuth(
     if (!firebaseReady) {
       return res.status(503).json({
         error:
-          "Authentication service is not configured on the backend."
+          "Firebase authentication is not configured."
       });
     }
 
-    const header =
+    const authorization =
       String(
         req.headers.authorization ||
           ""
       );
 
     if (
-      !header.startsWith(
+      !authorization.startsWith(
         "Bearer "
       )
     ) {
@@ -527,7 +512,7 @@ async function requireAuth(
     }
 
     const token =
-      header
+      authorization
         .slice(7)
         .trim();
 
@@ -549,7 +534,7 @@ async function requireAuth(
   } catch (error) {
     console.error(
       "AUTH ERROR:",
-      error
+      error.message
     );
 
     return res.status(401).json({
@@ -559,9 +544,8 @@ async function requireAuth(
   }
 }
 
-
 /* ============================================================
-   FIRESTORE HELPERS
+   FIRESTORE USER HELPERS
 ============================================================ */
 
 function userRef(uid) {
@@ -574,9 +558,9 @@ async function ensureUser(
   uid,
   email
 ) {
-  if (!firebaseReady) {
+  if (!firebaseReady || !db) {
     throw new Error(
-      "Firebase is not configured."
+      "Firestore is not configured."
     );
   }
 
@@ -590,6 +574,7 @@ async function ensureUser(
     await ref.set(
       {
         uid,
+
         email:
           email || null,
 
@@ -639,14 +624,14 @@ async function getUserData(
 
   return {
     ref,
+
     data:
       snap.data() || {}
   };
 }
 
-
 /* ============================================================
-   AI / GROQ
+   GROQ
 ============================================================ */
 
 async function groqChat(
@@ -654,7 +639,7 @@ async function groqChat(
 ) {
   if (!process.env.GROQ_KEY) {
     throw new Error(
-      "GROQ_KEY is not configured on the backend."
+      "GROQ_KEY is not configured."
     );
   }
 
@@ -727,9 +712,8 @@ async function groqChat(
   return content;
 }
 
-
 /* ============================================================
-   GENERATE WEBSITE
+   GENERATE
 ============================================================ */
 
 app.post(
@@ -760,16 +744,14 @@ app.post(
         cleanAIHtml(
           await groqChat([
             {
-              role:
-                "system",
+              role: "system",
 
               content:
                 "You are a professional web developer. Generate a complete standalone HTML document for the requested website. Return ONLY HTML. Include CSS and JavaScript inside the HTML. Do not use Markdown code fences."
             },
 
             {
-              role:
-                "user",
+              role: "user",
 
               content:
                 prompt
@@ -803,7 +785,6 @@ app.post(
   }
 );
 
-
 /* ============================================================
    USAGE
 ============================================================ */
@@ -813,7 +794,9 @@ app.get(
   requireAuth,
   async (req, res) => {
     try {
-      const { data } =
+      const {
+        data
+      } =
         await getUserData(
           req.user.uid,
           req.user.email
@@ -857,7 +840,7 @@ app.get(
       ) {
         return res.status(503).json({
           error:
-            "Firestore database is unavailable or has not been created yet."
+            "Firestore database is unavailable. Enable Firestore for this Firebase project."
         });
       }
 
@@ -869,9 +852,8 @@ app.get(
   }
 );
 
-
 /* ============================================================
-   EDIT WEBSITE
+   EDIT
 ============================================================ */
 
 app.post(
@@ -915,7 +897,10 @@ app.post(
         });
       }
 
-      const { ref, data } =
+      const {
+        ref,
+        data
+      } =
         await getUserData(
           req.user.uid,
           req.user.email
@@ -946,16 +931,14 @@ app.post(
         cleanAIHtml(
           await groqChat([
             {
-              role:
-                "system",
+              role: "system",
 
               content:
                 "You are an expert web developer. Modify the supplied HTML according to the user's instruction. Preserve existing functionality unless the instruction requires a change. Return ONLY the complete HTML document, with no Markdown fences."
             },
 
             {
-              role:
-                "user",
+              role: "user",
 
               content:
                 `CURRENT HTML:\n${html}\n\nUSER INSTRUCTION:\n${instruction}`
@@ -1029,7 +1012,7 @@ app.post(
       ) {
         return res.status(503).json({
           error:
-            "Firestore database is unavailable or has not been created yet."
+            "Firestore database is unavailable. Enable Firestore for this Firebase project."
         });
       }
 
@@ -1041,7 +1024,6 @@ app.post(
     }
   }
 );
-
 
 /* ============================================================
    PUBLISH
@@ -1071,7 +1053,10 @@ app.post(
         });
       }
 
-      const { ref, data } =
+      const {
+        ref,
+        data
+      } =
         await getUserData(
           req.user.uid,
           req.user.email
@@ -1176,7 +1161,7 @@ app.post(
       ) {
         return res.status(503).json({
           error:
-            "Firestore database is unavailable or has not been created yet."
+            "Firestore database is unavailable. Enable Firestore for this Firebase project."
         });
       }
 
@@ -1188,7 +1173,6 @@ app.post(
     }
   }
 );
-
 
 /* ============================================================
    PUBLIC PUBLISHED WEBSITE
@@ -1258,14 +1242,12 @@ app.get(
   }
 );
 
-
 /* ============================================================
-   TRON API HELPER
+   TRON HELPERS
 ============================================================ */
 
 async function tronFetch(
-  path,
-  options = {}
+  path
 ) {
   if (!tronConfigured) {
     throw new Error(
@@ -1276,8 +1258,7 @@ async function tronFetch(
   const url =
     `${TRONGRID_BASE_URL}${path}`;
 
-  let lastError =
-    null;
+  let lastError = null;
 
   for (
     let attempt = 1;
@@ -1289,20 +1270,14 @@ async function tronFetch(
         await fetch(
           url,
           {
-            method:
-              options.method ||
-              "GET",
+            method: "GET",
 
             headers: {
               Accept:
                 "application/json",
 
               "TRON-PRO-API-KEY":
-                process.env
-                  .TRONGRID_API_KEY,
-
-              ...(options.headers ||
-                {})
+                TRONGRID_API_KEY
             },
 
             signal:
@@ -1352,18 +1327,19 @@ async function tronFetch(
         TRON_RETRY_COUNT
       ) {
         await sleep(
-          1000 * attempt
+          attempt * 1000
         );
       }
     }
   }
 
-  throw lastError ||
+  throw (
+    lastError ||
     new Error(
       "TRON API request failed."
-    );
+    )
+  );
 }
-
 
 /* ============================================================
    TRON PAYMENT VERIFICATION
@@ -1372,9 +1348,6 @@ async function tronFetch(
 function normalizeTronAmount(
   value
 ) {
-  /*
-   * USDT uses 6 decimals.
-   */
   return (
     Number(value) /
     1000000
@@ -1385,10 +1358,6 @@ function amountsMatch(
   actual,
   expected
 ) {
-  /*
-   * Small tolerance for decimal
-   * conversion.
-   */
   return (
     Math.abs(
       Number(actual) -
@@ -1397,240 +1366,253 @@ function amountsMatch(
   );
 }
 
-async function getTrc20TransfersForTx(
-  txHash
+async function verifyTronPayment(
+  payment
 ) {
+  const txHash =
+    String(
+      payment.txHash || ""
+    ).trim();
+
+  if (!validTxHash(txHash)) {
+    return {
+      status: "rejected",
+
+      reason:
+        "Invalid TRON transaction hash."
+    };
+  }
+
+  const expectedPlan =
+    PLANS[
+      String(
+        payment.type || ""
+      )
+    ];
+
+  if (!expectedPlan) {
+    return {
+      status: "rejected",
+
+      reason:
+        "Invalid payment plan."
+    };
+  }
+
+  const expectedAmount =
+    safeNumber(
+      payment.amount,
+      expectedPlan.amount
+    );
+
+  if (
+    expectedAmount !==
+    expectedPlan.amount
+  ) {
+    return {
+      status: "rejected",
+
+      reason:
+        "Payment amount does not match the selected plan."
+    };
+  }
+
+  const wallet =
+    String(
+      TRC20_WALLET
+    ).trim();
+
   const contract =
     encodeURIComponent(
       USDT_TRC20_CONTRACT
     );
 
-  const path =
-    `/v1/transactions/${encodeURIComponent(
-      txHash
-    )}/internal-transactions`;
-
   /*
-   * This endpoint is not sufficient for TRC20 transfers
-   * on all Grid versions, so we use the account transfer
-   * endpoint below as the primary verifier.
+   * We search transfers received by our
+   * configured wallet.
+   *
+   * This avoids depending on a Firestore
+   * document existing for the transaction.
    */
-
-  const wallet =
+  const account =
     encodeURIComponent(
-      String(
-        process.env.TRC20_WALLET
-      ).trim()
+      wallet
     );
 
-  const accountPath =
-    `/v1/accounts/${wallet}/transactions/trc20?only_confirmed=true&limit=200&contract_address=${contract}`;
+  const path =
+    `/v1/accounts/${account}/transactions/trc20` +
+    `?only_confirmed=true` +
+    `&limit=200` +
+    `&contract_address=${contract}`;
 
-  const data =
-    await tronFetch(
-      accountPath
-    );
+  let data;
 
-  return Array.isArray(
-    data?.data
-  )
-    ? data.data
-    : [];
-}
+  try {
+    data =
+      await tronFetch(
+        path
+      );
+  } catch (error) {
+    /*
+     * A TRON NOT_FOUND response should NOT
+     * crash the scanner.
+     */
+    if (
+      isNotFoundError(
+        error
+      )
+    ) {
+      return {
+        status: "pending",
 
-async function verifyTronPayment(
-  payment
-) {
-  const expectedWallet =
-    String(
-      process.env.TRC20_WALLET ||
-        ""
-    ).trim();
+        reason:
+          "TRON transaction has not been found yet."
+      };
+    }
 
-  if (!expectedWallet) {
-    return {
-      ok: false,
-      status:
-        "rejected",
-      reason:
-        "TRC20_WALLET is not configured."
-    };
-  }
-
-  if (!validTxHash(payment.txHash)) {
-    return {
-      ok: false,
-      status:
-        "rejected",
-      reason:
-        "Invalid transaction hash."
-    };
+    throw error;
   }
 
   const transfers =
-    await getTrc20TransfersForTx(
-      payment.txHash
-    );
+    Array.isArray(
+      data?.data
+    )
+      ? data.data
+      : [];
 
   /*
-   * Find a confirmed USDT transfer with:
-   *
-   * - matching transaction
-   * - destination = our wallet
-   * - USDT contract = official contract
-   * - amount >= requested amount
+   * Find the exact transaction.
    */
-  const match =
+  const matching =
     transfers.find(
-      (transfer) => {
-        const transferTx =
-          String(
-            transfer.transaction_id ||
-              transfer.txID ||
-              transfer.txid ||
-              ""
-          ).toLowerCase();
-
-        const toAddress =
-          String(
-            transfer.to ||
-              transfer.to_address ||
-              ""
-          ).trim();
-
-        const tokenAddress =
-          String(
-            transfer.token_info?.address ||
-              transfer.contract_address ||
-              ""
-          ).trim();
-
-        const actualAmount =
-          normalizeTronAmount(
-            transfer.value
-          );
-
-        const sameTx =
-          transferTx ===
-          payment.txHash.toLowerCase();
-
-        const sameWallet =
-          toAddress ===
-          expectedWallet;
-
-        const sameToken =
-          !tokenAddress ||
-          tokenAddress ===
-            USDT_TRC20_CONTRACT;
-
-        const sufficientAmount =
-          amountsMatch(
-            actualAmount,
-            payment.amount
-          ) ||
-          actualAmount >
-            Number(payment.amount);
-
-        return (
-          sameTx &&
-          sameWallet &&
-          sameToken &&
-          sufficientAmount
-        );
-      }
+      (transfer) =>
+        String(
+          transfer.transaction_id ||
+            ""
+        ).toLowerCase() ===
+        txHash.toLowerCase()
     );
 
-  if (!match) {
+  if (!matching) {
     return {
-      ok: false,
-      status:
-        "pending",
+      status: "pending",
+
       reason:
-        "No matching confirmed USDT TRC20 transfer was found yet."
+        "Transaction has not appeared on the confirmed TRON USDT transfer list yet."
+    };
+  }
+
+  /*
+   * Confirm destination wallet.
+   */
+  const to =
+    String(
+      matching.to || ""
+    ).trim();
+
+  if (
+    to !== wallet
+  ) {
+    return {
+      status: "rejected",
+
+      reason:
+        "Transaction was not sent to the configured payment wallet."
+    };
+  }
+
+  /*
+   * Confirm USDT contract.
+   */
+  const tokenAddress =
+    String(
+      matching.token_info?.address ||
+        matching.contract_address ||
+        ""
+    ).trim();
+
+  if (
+    tokenAddress &&
+    tokenAddress !==
+      USDT_TRC20_CONTRACT
+  ) {
+    return {
+      status: "rejected",
+
+      reason:
+        "Transaction token is not the configured USDT TRC20 token."
     };
   }
 
   const actualAmount =
     normalizeTronAmount(
-      match.value
+      matching.value
     );
 
-  return {
-    ok: true,
+  if (
+    !amountsMatch(
+      actualAmount,
+      expectedAmount
+    )
+  ) {
+    return {
+      status: "rejected",
 
-    status:
-      "confirmed",
+      reason:
+        `Incorrect payment amount. Expected ${expectedAmount} USDT but received ${actualAmount} USDT.`
+    };
+  }
+
+  return {
+    status: "confirmed",
 
     amount:
       actualAmount,
 
     from:
-      match.from ||
-      null,
+      matching.from || null,
 
     to:
-      match.to ||
-      expectedWallet,
+      matching.to || null,
 
-    txHash:
-      payment.txHash
+    txHash
   };
 }
 
-
 /* ============================================================
-   PAYMENT ACCESS GRANT
+   GRANT PAYMENT ACCESS
 ============================================================ */
 
 async function grantPaymentAccess(
   payment
 ) {
-  if (!firebaseReady) {
-    throw new Error(
-      "Firebase is not available."
-    );
+  if (
+    !firebaseReady ||
+    !db
+  ) {
+    return;
+  }
+
+  const uid =
+    payment.uid;
+
+  if (!uid) {
+    return;
   }
 
   const ref =
-    userRef(
-      payment.uid
-    );
+    userRef(uid);
 
   const snap =
     await ref.get();
 
-  if (!snap.exists) {
-    await ref.set(
-      {
-        uid:
-          payment.uid,
+  const user =
+    snap.data() || {};
 
-        email:
-          payment.email ||
-          null,
-
-        freeWebsitesRemaining:
-          3,
-
-        freeEditsRemaining:
-          3,
-
-        publishingAccess:
-          false,
-
-        paidEditing:
-          false,
-
-        createdAt:
-          admin.firestore
-            .FieldValue
-            .serverTimestamp()
-      },
-      {
-        merge: true
-      }
+  const type =
+    String(
+      payment.type || ""
     );
-  }
 
   const update = {
     updatedAt:
@@ -1639,49 +1621,30 @@ async function grantPaymentAccess(
         .serverTimestamp(),
 
     lastPaymentId:
-      payment.paymentId,
+      payment.paymentId || null,
 
     lastPaymentTxHash:
-      payment.txHash,
-
-    lastPaymentAmount:
-      payment.amount,
-
-    lastPaymentType:
-      payment.type,
-
-    lastPaymentAt:
-      admin.firestore
-        .FieldValue
-        .serverTimestamp()
+      payment.txHash || null
   };
 
-  /*
-   * Single:
-   *
-   * Give one publishing credit and one editing credit.
-   */
   if (
-    payment.type ===
-    "single"
+    type === "single"
   ) {
-    update.publishingAccess =
-      true;
+    update.freeWebsitesRemaining =
+      safeNumber(
+        user.freeWebsitesRemaining,
+        0
+      ) + 1;
 
-    update.paidEditing =
-      true;
+    update.freeEditsRemaining =
+      safeNumber(
+        user.freeEditsRemaining,
+        0
+      ) + 1;
   }
 
-  /*
-   * Monthly:
-   *
-   * Enable access.
-   *
-   * Store expiry if configured.
-   */
   if (
-    payment.type ===
-    "monthly"
+    type === "monthly"
   ) {
     update.publishingAccess =
       true;
@@ -1689,28 +1652,12 @@ async function grantPaymentAccess(
     update.paidEditing =
       true;
 
-    update.subscriptionType =
+    update.subscription =
       "monthly";
-
-    update.subscriptionExpiresAt =
-      admin.firestore.Timestamp.fromDate(
-        new Date(
-          Date.now() +
-            30 *
-              24 *
-              60 *
-              60 *
-              1000
-        )
-      );
   }
 
-  /*
-   * Lifetime:
-   */
   if (
-    payment.type ===
-    "lifetime"
+    type === "lifetime"
   ) {
     update.publishingAccess =
       true;
@@ -1718,11 +1665,8 @@ async function grantPaymentAccess(
     update.paidEditing =
       true;
 
-    update.subscriptionType =
+    update.subscription =
       "lifetime";
-
-    update.subscriptionExpiresAt =
-      null;
   }
 
   await ref.set(
@@ -1733,7 +1677,6 @@ async function grantPaymentAccess(
   );
 }
 
-
 /* ============================================================
    PAYMENT SUBMISSION
 ============================================================ */
@@ -1743,16 +1686,21 @@ app.post(
   requireAuth,
   async (req, res) => {
     try {
-      const amount =
-        Number(
-          req.body?.amount
-        );
+      if (
+        !firebaseReady ||
+        !db
+      ) {
+        return res.status(503).json({
+          error:
+            "Firestore is not configured."
+        });
+      }
 
       const type =
         String(
           req.body?.type ||
             ""
-        );
+        ).trim();
 
       const txHash =
         String(
@@ -1760,17 +1708,10 @@ app.post(
             ""
         ).trim();
 
-      if (
-        !Number.isFinite(
-          amount
-        ) ||
-        amount <= 0
-      ) {
-        return res.status(400).json({
-          error:
-            "Invalid payment amount."
-        });
-      }
+      const amount =
+        Number(
+          req.body?.amount
+        );
 
       if (
         !PLANS[type]
@@ -1781,8 +1722,20 @@ app.post(
         });
       }
 
+      if (
+        !Number.isFinite(
+          amount
+        )
+      ) {
+        return res.status(400).json({
+          error:
+            "Invalid payment amount."
+        });
+      }
+
       /*
-       * Do not trust amount supplied by frontend.
+       * Do not allow the frontend to choose
+       * an arbitrary amount.
        */
       if (
         amount !==
@@ -1805,53 +1758,21 @@ app.post(
         });
       }
 
-      if (!firebaseReady) {
-        return res.status(503).json({
-          error:
-            "Payment database is not configured."
-        });
-      }
-
       /*
-       * Check whether transaction was already submitted.
-       *
-       * IMPORTANT:
-       * A missing Firestore database should not crash Node.
+       * Prevent duplicate submissions.
        */
-      let existing;
-
-      try {
-        existing =
-          await db
-            .collection(
-              "payments"
-            )
-            .where(
-              "txHash",
-              "==",
-              txHash
-            )
-            .limit(1)
-            .get();
-      } catch (error) {
-        console.error(
-          "PAYMENT DUPLICATE CHECK ERROR:",
-          error
-        );
-
-        if (
-          isNotFoundError(
-            error
+      const existing =
+        await db
+          .collection(
+            "payments"
           )
-        ) {
-          return res.status(503).json({
-            error:
-              "Firestore returned NOT_FOUND. Make sure the Firestore database exists in the Firebase project."
-          });
-        }
-
-        throw error;
-      }
+          .where(
+            "txHash",
+            "==",
+            txHash
+          )
+          .limit(1)
+          .get();
 
       if (
         !existing.empty
@@ -1904,95 +1825,132 @@ app.post(
       });
 
       /*
-       * Try immediately.
+       * Try verification immediately.
        *
-       * The background scanner will continue if it is
-       * not confirmed yet.
+       * If TRON has not indexed the transaction yet,
+       * leave it pending for the background scanner.
        */
+      let verification;
+
       try {
-        const payment =
-          {
-            paymentId:
-              paymentRef.id,
-
-            uid:
-              req.user.uid,
-
-            email:
-              req.user.email ||
-              null,
-
+        verification =
+          await verifyTronPayment({
             amount,
-
             type,
-
             txHash
-          };
+          });
+      } catch (verificationError) {
+        console.error(
+          "IMMEDIATE PAYMENT VERIFICATION ERROR:",
+          verificationError
+        );
 
-        const verification =
-          await verifyTronPayment(
-            payment
-          );
+        verification = {
+          status: "pending",
 
-        if (
-          verification.status ===
-          "confirmed"
-        ) {
-          await paymentRef.set(
-            {
-              status:
-                "confirmed",
+          reason:
+            "Payment submitted. Blockchain verification is pending."
+        };
+      }
 
-              verifiedAt:
-                admin.firestore
-                  .FieldValue
-                  .serverTimestamp(),
-
-              verifiedAmount:
-                verification.amount,
-
-              from:
-                verification.from,
-
-              to:
-                verification.to,
-
-              updatedAt:
-                admin.firestore
-                  .FieldValue
-                  .serverTimestamp()
-            },
-            {
-              merge: true
-            }
-          );
-
-          await grantPaymentAccess(
-            payment
-          );
-
-          return res.status(200).json({
-            ok: true,
-
-            paymentId:
-              paymentRef.id,
-
+      if (
+        verification.status ===
+        "confirmed"
+      ) {
+        await paymentRef.set(
+          {
             status:
               "confirmed",
 
-            message:
-              "Payment verified successfully."
-          });
-        }
-      } catch (scanError) {
-        /*
-         * Never reject the payment submission just because the
-         * immediate scanner had a temporary error.
-         */
-        console.error(
-          "IMMEDIATE PAYMENT VERIFICATION WARNING:",
-          scanError
+            verifiedAmount:
+              verification.amount,
+
+            from:
+              verification.from,
+
+            to:
+              verification.to,
+
+            verifiedAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp(),
+
+            updatedAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp()
+          },
+          {
+            merge: true
+          }
         );
+
+        await grantPaymentAccess({
+          paymentId:
+            paymentRef.id,
+
+          uid:
+            req.user.uid,
+
+          email:
+            req.user.email ||
+            null,
+
+          amount,
+
+          type,
+
+          txHash
+        });
+
+        return res.status(200).json({
+          ok: true,
+
+          paymentId:
+            paymentRef.id,
+
+          status:
+            "confirmed",
+
+          message:
+            "Payment verified successfully."
+        });
+      }
+
+      if (
+        verification.status ===
+        "rejected"
+      ) {
+        await paymentRef.set(
+          {
+            status:
+              "rejected",
+
+            reason:
+              verification.reason,
+
+            updatedAt:
+              admin.firestore
+                .FieldValue
+                .serverTimestamp()
+          },
+          {
+            merge: true
+          }
+        );
+
+        return res.status(400).json({
+          error:
+            verification.reason ||
+            "Payment could not be verified.",
+
+          paymentId:
+            paymentRef.id,
+
+          status:
+            "rejected"
+        });
       }
 
       return res.status(202).json({
@@ -2005,7 +1963,7 @@ app.post(
           "pending",
 
         message:
-          "Payment submitted and is awaiting blockchain verification."
+          "Payment submitted. It will be verified automatically once the TRON transaction is available."
       });
     } catch (error) {
       console.error(
@@ -2020,7 +1978,7 @@ app.post(
       ) {
         return res.status(503).json({
           error:
-            "Firestore returned NOT_FOUND. Check that Firestore Database is enabled for this Firebase project."
+            "Firestore is unavailable. Make sure Firestore Database is enabled for the Firebase project."
         });
       }
 
@@ -2033,7 +1991,6 @@ app.post(
   }
 );
 
-
 /* ============================================================
    PAYMENT STATUS
 ============================================================ */
@@ -2043,10 +2000,13 @@ app.get(
   requireAuth,
   async (req, res) => {
     try {
-      if (!firebaseReady) {
+      if (
+        !firebaseReady ||
+        !db
+      ) {
         return res.status(503).json({
           error:
-            "Payment database is not configured."
+            "Firestore is not configured."
         });
       }
 
@@ -2084,7 +2044,8 @@ app.get(
         ok: true,
 
         paymentId:
-          payment.paymentId,
+          payment.paymentId ||
+          snap.id,
 
         status:
           payment.status ||
@@ -2092,14 +2053,7 @@ app.get(
 
         reason:
           payment.reason ||
-          null,
-
-        amount:
-          payment.amount ||
-          null,
-
-        type:
-          payment.type ||
+          payment.lastVerificationMessage ||
           null
       });
     } catch (error) {
@@ -2115,7 +2069,7 @@ app.get(
       ) {
         return res.status(503).json({
           error:
-            "Firestore database is currently unavailable."
+            "Firestore is unavailable."
         });
       }
 
@@ -2127,36 +2081,47 @@ app.get(
   }
 );
 
-
 /* ============================================================
    PAYMENT SCANNER
 ============================================================ */
 
-let scannerRunning =
-  false;
-
-let scannerTimer =
-  null;
-
-let scannerBackoff =
-  0;
+let scannerRunning = false;
+let scannerTimer = null;
+let scannerBackoff = 0;
 
 async function scanPendingPayments() {
+  /*
+   * Never allow two scanner cycles to run
+   * simultaneously.
+   */
   if (scannerRunning) {
     return;
   }
 
   if (
     !firebaseReady ||
+    !db ||
     !tronConfigured
   ) {
     return;
   }
 
-  scannerRunning =
-    true;
+  scannerRunning = true;
 
   try {
+    /*
+     * If Firestore previously returned NOT_FOUND,
+     * wait before retrying.
+     */
+    if (
+      scannerBackoff >
+      0
+    ) {
+      await sleep(
+        scannerBackoff
+      );
+    }
+
     let snapshot;
 
     try {
@@ -2176,11 +2141,10 @@ async function scanPendingPayments() {
           .get();
     } catch (error) {
       /*
-       * THIS is the important hardening for:
+       * THIS IS THE IMPORTANT PART.
        *
-       * PAYMENT SCAN ERROR: 5 NOT_FOUND
-       *
-       * Do not allow it to terminate the Node process.
+       * Firestore code 5 / NOT_FOUND must
+       * NOT kill Render.
        */
       if (
         isNotFoundError(
@@ -2189,29 +2153,14 @@ async function scanPendingPayments() {
       ) {
         scannerBackoff =
           Math.min(
-            scannerBackoff +
-              1,
-            6
+            scannerBackoff
+              ? scannerBackoff * 2
+              : 30000,
+            300000
           );
 
-        const retrySeconds =
-          Math.min(
-            300,
-            15 *
-              Math.pow(
-                2,
-                scannerBackoff -
-                  1
-              )
-          );
-
-        console.error(
-          `PAYMENT SCAN: Firestore returned NOT_FOUND (code 5). Scanner paused for ${retrySeconds}s.`
-        );
-
-        console.error(
-          "Make sure Firestore Database is enabled in Firebase Console for project:",
-          process.env.FIREBASE_PROJECT_ID
+        console.warn(
+          `PAYMENT SCANNER: Firestore returned NOT_FOUND (code 5). Scanner paused temporarily. Retry backoff: ${Math.round(scannerBackoff / 1000)} seconds.`
         );
 
         return;
@@ -2221,10 +2170,9 @@ async function scanPendingPayments() {
     }
 
     /*
-     * Successful Firestore query resets backoff.
+     * Firestore recovered.
      */
-    scannerBackoff =
-      0;
+    scannerBackoff = 0;
 
     if (
       snapshot.empty
@@ -2233,7 +2181,7 @@ async function scanPendingPayments() {
     }
 
     console.log(
-      `PAYMENT SCAN: checking ${snapshot.size} pending payment(s).`
+      `PAYMENT SCANNER: checking ${snapshot.size} pending payment(s).`
     );
 
     for (
@@ -2241,27 +2189,19 @@ async function scanPendingPayments() {
         snapshot.docs
     ) {
       const payment =
-        doc.data();
+        doc.data() || {};
 
       const paymentId =
         payment.paymentId ||
         doc.id;
 
       try {
-        /*
-         * Prevent malformed documents from breaking scanner.
-         */
         if (
           !payment.uid ||
           !payment.txHash ||
           !payment.type ||
           !payment.amount
         ) {
-          console.warn(
-            "PAYMENT SCAN: skipping malformed payment:",
-            paymentId
-          );
-
           await doc.ref.set(
             {
               status:
@@ -2293,17 +2233,23 @@ async function scanPendingPayments() {
           "confirmed"
         ) {
           /*
-           * Re-read payment immediately before granting access.
-           * This prevents duplicate credits if multiple scanner
-           * cycles overlap or the process restarts.
+           * Re-read before granting access.
            */
           const fresh =
             await doc.ref.get();
 
-          const freshPayment =
-            fresh.data() ||
-            {};
+          if (
+            !fresh.exists
+          ) {
+            continue;
+          }
 
+          const freshPayment =
+            fresh.data() || {};
+
+          /*
+           * Already processed.
+           */
           if (
             freshPayment.status ===
             "confirmed"
@@ -2316,11 +2262,6 @@ async function scanPendingPayments() {
               status:
                 "confirmed",
 
-              verifiedAt:
-                admin.firestore
-                  .FieldValue
-                  .serverTimestamp(),
-
               verifiedAmount:
                 verification.amount,
 
@@ -2330,11 +2271,10 @@ async function scanPendingPayments() {
               to:
                 verification.to,
 
-              verificationAttempts:
-                safeNumber(
-                  freshPayment.verificationAttempts,
-                  0
-                ) + 1,
+              verifiedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp(),
 
               updatedAt:
                 admin.firestore
@@ -2346,28 +2286,26 @@ async function scanPendingPayments() {
             }
           );
 
-          await grantPaymentAccess(
-            {
-              ...freshPayment,
+          await grantPaymentAccess({
+            ...freshPayment,
 
-              paymentId,
+            paymentId,
 
-              uid:
-                freshPayment.uid,
+            uid:
+              freshPayment.uid,
 
-              email:
-                freshPayment.email,
+            email:
+              freshPayment.email,
 
-              amount:
-                freshPayment.amount,
+            amount:
+              freshPayment.amount,
 
-              type:
-                freshPayment.type,
+            type:
+              freshPayment.type,
 
-              txHash:
-                freshPayment.txHash
-            }
-          );
+            txHash:
+              freshPayment.txHash
+          });
 
           console.log(
             `PAYMENT CONFIRMED: ${paymentId}`
@@ -2376,19 +2314,42 @@ async function scanPendingPayments() {
           continue;
         }
 
-        /*
-         * Still pending.
-         */
-        const attempts =
-          safeNumber(
-            payment.verificationAttempts,
-            0
-          ) + 1;
+        if (
+          verification.status ===
+          "rejected"
+        ) {
+          await doc.ref.set(
+            {
+              status:
+                "rejected",
 
+              reason:
+                verification.reason ||
+                "Payment rejected.",
+
+              updatedAt:
+                admin.firestore
+                  .FieldValue
+                  .serverTimestamp()
+            },
+            {
+              merge: true
+            }
+          );
+
+          continue;
+        }
+
+        /*
+         * Pending.
+         */
         await doc.ref.set(
           {
             verificationAttempts:
-              attempts,
+              safeNumber(
+                payment.verificationAttempts,
+                0
+              ) + 1,
 
             lastVerificationMessage:
               verification.reason ||
@@ -2410,11 +2371,12 @@ async function scanPendingPayments() {
         );
       } catch (paymentError) {
         /*
-         * A single bad payment must NEVER kill the entire scanner.
+         * A single payment must never stop
+         * the entire scanner.
          */
         console.error(
           `PAYMENT SCAN ERROR for ${paymentId}:`,
-          paymentError
+          paymentError.message
         );
 
         if (
@@ -2422,8 +2384,8 @@ async function scanPendingPayments() {
             paymentError
           )
         ) {
-          console.error(
-            `PAYMENT ${paymentId}: Firestore/TRON returned NOT_FOUND. Leaving payment pending.`
+          console.warn(
+            `PAYMENT ${paymentId}: resource returned NOT_FOUND. Leaving payment pending.`
           );
 
           continue;
@@ -2453,39 +2415,42 @@ async function scanPendingPayments() {
         } catch (
           updateError
         ) {
+          /*
+           * Do nothing else.
+           * The scanner must continue.
+           */
           console.error(
-            "PAYMENT SCAN: unable to record scanner error:",
-            updateError
+            "Unable to update payment scanner error:",
+            updateError.message
           );
         }
       }
     }
   } catch (error) {
     /*
-     * TOP LEVEL SCANNER PROTECTION.
+     * ABSOLUTE TOP-LEVEL PROTECTION.
      *
-     * Nothing from this function is allowed to crash Node.
+     * The payment scanner can never
+     * crash the HTTP server.
      */
     if (
       isNotFoundError(
         error
       )
     ) {
-      console.error(
-        "PAYMENT SCAN: Firestore NOT_FOUND (code 5). Scanner will retry later."
+      console.warn(
+        "PAYMENT SCANNER: Firestore returned code 5 NOT_FOUND. Scanner remains alive."
       );
     } else {
       console.error(
-        "PAYMENT SCAN UNHANDLED ERROR:",
+        "PAYMENT SCANNER ERROR:",
         error
       );
     }
   } finally {
-    scannerRunning =
-      false;
+    scannerRunning = false;
   }
 }
-
 
 /* ============================================================
    START PAYMENT SCANNER
@@ -2494,23 +2459,22 @@ async function scanPendingPayments() {
 function startPaymentScanner() {
   if (
     !firebaseReady ||
+    !db ||
     !tronConfigured
   ) {
     console.warn(
       "Payment scanner disabled:",
       {
         firebaseReady,
-        tronConfigured
+        tronConfigured,
+        walletConfigured:
+          Boolean(
+            TRC20_WALLET
+          )
       }
     );
 
     return;
-  }
-
-  if (scannerTimer) {
-    clearInterval(
-      scannerTimer
-    );
   }
 
   console.log(
@@ -2518,21 +2482,23 @@ function startPaymentScanner() {
   );
 
   console.log(
-    `Payment scan interval: ${PAYMENT_SCAN_INTERVAL_MS}ms`
+    `Payment scanner interval: ${PAYMENT_SCAN_INTERVAL_MS}ms`
   );
 
   /*
-   * Do one scan shortly after startup.
+   * Initial scan.
    */
   setTimeout(
     () => {
       scanPendingPayments()
-        .catch((error) => {
-          console.error(
-            "INITIAL PAYMENT SCAN ERROR:",
-            error
-          );
-        });
+        .catch(
+          (error) => {
+            console.error(
+              "INITIAL PAYMENT SCAN ERROR:",
+              error
+            );
+          }
+        );
     },
     5000
   );
@@ -2541,23 +2507,24 @@ function startPaymentScanner() {
     setInterval(
       () => {
         scanPendingPayments()
-          .catch((error) => {
-            /*
-             * Absolute last-resort protection.
-             */
-            console.error(
-              "PAYMENT SCANNER LOOP ERROR:",
-              error
-            );
-          });
+          .catch(
+            (error) => {
+              /*
+               * Final protection.
+               */
+              console.error(
+                "PAYMENT SCANNER LOOP ERROR:",
+                error
+              );
+            }
+          );
       },
       PAYMENT_SCAN_INTERVAL_MS
     );
 }
 
-
 /* ============================================================
-   404 HANDLER
+   404
 ============================================================ */
 
 app.use(
@@ -2574,7 +2541,6 @@ app.use(
     });
   }
 );
-
 
 /* ============================================================
    ERROR HANDLER
@@ -2623,14 +2589,12 @@ app.use(
   }
 );
 
-
 /* ============================================================
    PROCESS SAFETY
 ============================================================ */
 
 /*
- * Do not let an unhandled rejected promise from an asynchronous
- * background task take down the Render process.
+ * Background Promise protection.
  */
 process.on(
   "unhandledRejection",
@@ -2642,6 +2606,10 @@ process.on(
   }
 );
 
+/*
+ * Do not intentionally terminate Render
+ * because of a background exception.
+ */
 process.on(
   "uncaughtException",
   (error) => {
@@ -2649,89 +2617,97 @@ process.on(
       "UNCAUGHT EXCEPTION:",
       error
     );
-
-    /*
-     * We intentionally do not call process.exit().
-     *
-     * This gives the server a chance to continue serving health
-     * checks and API requests.
-     */
   }
 );
 
-
 /* ============================================================
-   START SERVER
+   START
 ============================================================ */
 
-app.listen(
-  PORT,
-  HOST,
-  () => {
-    console.log(
-      "========================================"
-    );
+const server =
+  app.listen(
+    PORT,
+    HOST,
+    () => {
+      console.log(
+        "========================================"
+      );
 
-    console.log(
-      "Walker Webs API"
-    );
+      console.log(
+        "Walker Webs API"
+      );
 
-    console.log(
-      `Listening on ${HOST}:${PORT}`
-    );
+      console.log(
+        `Listening on ${HOST}:${PORT}`
+      );
 
-    console.log(
-      `Health: /api/health`
-    );
+      console.log(
+        `Health: /api/health`
+      );
 
-    console.log(
-      `Firebase: ${
-        firebaseReady
-          ? "READY"
-          : "NOT READY"
-      }`
-    );
+      console.log(
+        `Firebase: ${
+          firebaseReady
+            ? "READY"
+            : "NOT READY"
+        }`
+      );
 
-    console.log(
-      `Groq: ${
-        aiConfigured
-          ? "CONFIGURED"
-          : "NOT CONFIGURED"
-      }`
-    );
+      console.log(
+        `Groq: ${
+          aiConfigured
+            ? "CONFIGURED"
+            : "NOT CONFIGURED"
+        }`
+      );
 
-    console.log(
-      `TRON: ${
-        tronConfigured
-          ? "CONFIGURED"
-          : "NOT CONFIGURED"
-      }`
-    );
+      console.log(
+        `TRON: ${
+          tronConfigured
+            ? "CONFIGURED"
+            : "NOT CONFIGURED"
+        }`
+      );
 
-    console.log(
-      `Wallet: ${
-        process.env.TRC20_WALLET
-          ? "CONFIGURED"
-          : "NOT CONFIGURED"
-      }`
-    );
+      console.log(
+        `Wallet: ${
+          TRC20_WALLET
+            ? "CONFIGURED"
+            : "NOT CONFIGURED"
+        }`
+      );
 
-    console.log(
-      `Payment scanner: ${
-        firebaseReady &&
-        tronConfigured
-          ? "ENABLED"
-          : "DISABLED"
-      }`
-    );
+      console.log(
+        `Payment scanner: ${
+          firebaseReady &&
+          tronConfigured
+            ? "ENABLED"
+            : "DISABLED"
+        }`
+      );
 
-    console.log(
-      "========================================"
-    );
+      console.log(
+        "========================================"
+      );
 
-    /*
-     * Start scanner only after HTTP server is listening.
-     */
-    startPaymentScanner();
+      /*
+       * Start scanner only after
+       * HTTP server is listening.
+       */
+      startPaymentScanner();
+    }
+  );
+
+/*
+ * Keep reference to server so shutdown
+ * can be handled cleanly.
+ */
+server.on(
+  "error",
+  (error) => {
+    console.error(
+      "HTTP SERVER ERROR:",
+      error
+    );
   }
 );
